@@ -1,0 +1,259 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# MCP Server HTTP/SSE transport for Magi Archive
+# This server implements the Model Context Protocol over HTTP/SSE
+# for remote access via ChatGPT, Claude web, etc.
+#
+# The stdio version (bin/mcp-server) remains for local desktop use.
+
+require "bundler/setup"
+require "mcp"
+require "sinatra/base"
+require "json"
+require_relative "../lib/magi/archive/mcp"
+
+# Load all MCP tool classes
+# Core card operations
+require_relative "../lib/magi/archive/mcp/server/tools/get_card"
+require_relative "../lib/magi/archive/mcp/server/tools/search_cards"
+require_relative "../lib/magi/archive/mcp/server/tools/create_card"
+require_relative "../lib/magi/archive/mcp/server/tools/update_card"
+require_relative "../lib/magi/archive/mcp/server/tools/delete_card"
+require_relative "../lib/magi/archive/mcp/server/tools/rename_card"
+require_relative "../lib/magi/archive/mcp/server/tools/list_children"
+
+# Tag operations
+require_relative "../lib/magi/archive/mcp/server/tools/get_tags"
+require_relative "../lib/magi/archive/mcp/server/tools/search_by_tags"
+require_relative "../lib/magi/archive/mcp/server/tools/suggest_tags"
+
+# Relationships
+require_relative "../lib/magi/archive/mcp/server/tools/get_relationships"
+
+# Types and rendering
+require_relative "../lib/magi/archive/mcp/server/tools/get_types"
+require_relative "../lib/magi/archive/mcp/server/tools/render_content"
+
+# Admin operations
+require_relative "../lib/magi/archive/mcp/server/tools/admin_backup"
+
+# Card history and restore
+require_relative "../lib/magi/archive/mcp/server/tools/get_card_history"
+require_relative "../lib/magi/archive/mcp/server/tools/get_revision"
+require_relative "../lib/magi/archive/mcp/server/tools/restore_card"
+require_relative "../lib/magi/archive/mcp/server/tools/list_trash"
+
+# Weekly summaries
+require_relative "../lib/magi/archive/mcp/server/tools/create_weekly_summary"
+
+# Health check
+require_relative "../lib/magi/archive/mcp/server/tools/health_check"
+
+# Phase 3: Advanced operations
+require_relative "../lib/magi/archive/mcp/server/tools/batch_cards"
+require_relative "../lib/magi/archive/mcp/server/tools/run_query"
+require_relative "../lib/magi/archive/mcp/server/tools/spoiler_scan"
+
+# Auto-linking
+require_relative "../lib/magi/archive/mcp/server/tools/auto_link"
+
+# Initialize the Magi Archive tools
+magi_tools = begin
+  Magi::Archive::Mcp::Tools.new
+rescue StandardError => e
+  puts "Error initializing Magi Archive tools: #{e.message}"
+  puts "Please ensure you have configured authentication in environment variables"
+  exit 1
+end
+
+# Get configuration from environment
+PORT = ENV.fetch("MCP_SERVER_PORT", "3002").to_i
+HOST = ENV.fetch("MCP_SERVER_HOST", "0.0.0.0")
+working_directory = ENV["MAGI_WORKING_DIR"] || "/home/ubuntu"
+
+# Create server context
+server_context = {
+  magi_tools: magi_tools,
+  working_directory: working_directory
+}
+
+# Create the MCP server
+mcp_server = ::MCP::Server.new(
+  name: "magi-archive",
+  version: Magi::Archive::Mcp::VERSION,
+  tools: [
+    # Core card operations
+    Magi::Archive::Mcp::Server::Tools::GetCard,
+    Magi::Archive::Mcp::Server::Tools::SearchCards,
+    Magi::Archive::Mcp::Server::Tools::CreateCard,
+    Magi::Archive::Mcp::Server::Tools::UpdateCard,
+    Magi::Archive::Mcp::Server::Tools::DeleteCard,
+    Magi::Archive::Mcp::Server::Tools::RenameCard,
+    Magi::Archive::Mcp::Server::Tools::ListChildren,
+
+    # Tag operations
+    Magi::Archive::Mcp::Server::Tools::GetTags,
+    Magi::Archive::Mcp::Server::Tools::SearchByTags,
+    Magi::Archive::Mcp::Server::Tools::SuggestTags,
+
+    # Relationships
+    Magi::Archive::Mcp::Server::Tools::GetRelationships,
+
+    # Types and rendering
+    Magi::Archive::Mcp::Server::Tools::GetTypes,
+    Magi::Archive::Mcp::Server::Tools::RenderContent,
+
+    # Admin operations
+    Magi::Archive::Mcp::Server::Tools::AdminBackup,
+
+    # Card history and restore
+    Magi::Archive::Mcp::Server::Tools::GetCardHistory,
+    Magi::Archive::Mcp::Server::Tools::GetRevision,
+    Magi::Archive::Mcp::Server::Tools::RestoreCard,
+    Magi::Archive::Mcp::Server::Tools::ListTrash,
+
+    # Weekly summaries
+    Magi::Archive::Mcp::Server::Tools::CreateWeeklySummary,
+
+    # Health check
+    Magi::Archive::Mcp::Server::Tools::HealthCheck,
+
+    # Phase 3: Advanced operations
+    Magi::Archive::Mcp::Server::Tools::BatchCards,
+    Magi::Archive::Mcp::Server::Tools::RunQuery,
+    Magi::Archive::Mcp::Server::Tools::SpoilerScan,
+
+    # Auto-linking
+    Magi::Archive::Mcp::Server::Tools::AutoLink
+  ],
+  server_context: server_context
+)
+
+# Middleware to bypass any host authorization checks
+class HostBypassMiddleware
+  def initialize(app)
+    @app = app
+  end
+
+  def call(env)
+    # Always allow - bypass any host checks
+    @app.call(env)
+  rescue => e
+    # If we get a "Host not permitted" error, it's from Rack::Protection
+    # Log it and return 403 for debugging
+    if e.message.include?("Host") || e.message.include?("permitted")
+      [403, {"Content-Type" => "text/plain"}, ["DEBUG: #{e.class}: #{e.message}\n#{e.backtrace.first(5).join("\n")}"]]
+    else
+      raise
+    end
+  end
+end
+
+# Define Sinatra application class
+class MagiArchiveMcpApp < Sinatra::Base
+  # Configure before anything else
+  set :server, :puma
+  set :quiet, true
+  set :port, PORT
+  set :bind, HOST
+
+  # Completely disable ALL Rack::Protection
+  set :protection, false
+
+  # Add our bypass middleware
+  use HostBypassMiddleware
+
+  # Store MCP server reference (will be set after class definition)
+  class << self
+    attr_accessor :mcp_server_instance
+  end
+
+  # Health check endpoint (no auth required)
+  get '/health' do
+    content_type :json
+    {
+      status: "healthy",
+      version: Magi::Archive::Mcp::VERSION,
+      timestamp: Time.now.iso8601
+    }.to_json
+  end
+
+  # SSE endpoint for MCP communication
+  get '/sse' do
+    content_type 'text/event-stream'
+    stream(:keep_open) do |out|
+      # MCP SSE transport implementation
+      # This follows the MCP SSE specification
+
+      # Send initial connection event
+      out << "event: endpoint\n"
+      out << "data: /message\n\n"
+
+      # Keep connection alive
+      Thread.new do
+        loop do
+          sleep 30
+          out << ": keepalive\n\n" rescue break
+        end
+      end
+    end
+  end
+
+  # Message endpoint for MCP requests
+  post '/message' do
+    content_type :json
+
+    begin
+      request_data = JSON.parse(request.body.read)
+
+      # Handle MCP request through the server
+      response = self.class.mcp_server_instance.handle_request(request_data)
+
+      response.to_json
+    rescue JSON::ParserError => e
+      status 400
+      { error: "Invalid JSON", message: e.message }.to_json
+    rescue StandardError => e
+      status 500
+      { error: "Server error", message: e.message }.to_json
+    end
+  end
+
+  # Root endpoint - server info
+  get '/' do
+    content_type :json
+    {
+      name: "magi-archive-mcp",
+      version: Magi::Archive::Mcp::VERSION,
+      protocol: "mcp",
+      transport: "http/sse",
+      endpoints: {
+        health: "/health",
+        sse: "/sse",
+        message: "/message"
+      },
+      tools_count: self.class.mcp_server_instance.tools.length
+    }.to_json
+  end
+
+  # Start the server
+  run! if app_file == $0
+end
+
+# Set MCP server instance on the app class
+MagiArchiveMcpApp.mcp_server_instance = mcp_server
+
+# Log startup
+puts "Magi Archive MCP Server v#{Magi::Archive::Mcp::VERSION}"
+puts "HTTP/SSE Transport Mode"
+puts "Listening on #{HOST}:#{PORT}"
+puts "Working directory: #{working_directory}"
+puts "Authenticated as: #{magi_tools.client.config.username || 'API Key'}"
+
+# Note: OAuth is handled by RackApp (bin/mcp-server-rack-direct).
+# This Sinatra server is kept for backward compatibility but does not
+# support per-user OAuth auth. Use bin/mcp-server-rack-direct in production.
+
+# Start the Sinatra app (only if run directly, not via rackup)
+MagiArchiveMcpApp.run! if __FILE__ == $0

@@ -1,0 +1,29 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# SIMPLE RACK VERSION - Testing if Sinatra is the problem
+
+require "bundler/setup"
+require "puma"
+require "rack"
+require "json"
+
+# Health check endpoint
+app = lambda do |env|
+  request = Rack::Request.new(env)
+
+  case request.path
+  when "/health"
+    [200, { "Content-Type" => "application/json" }, [{ status: "healthy", version: "0.1.0-RACK", timestamp: Time.now.iso8601 }.to_json]]
+  when "/"
+    [200, { "Content-Type" => "application/json" }, [{ name: "magi-archive-mcp-rack-test", message: "Plain Rack app - no Sinatra" }.to_json]]
+  else
+    [404, { "Content-Type" => "text/plain" }, ["Not Found"]]
+  end
+end
+
+# Run with Puma directly
+Puma::Server.new(app).tap do |server|
+  server.add_tcp_listener "127.0.0.1", 3002
+  server.run
+end

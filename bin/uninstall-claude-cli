@@ -1,0 +1,70 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Uninstaller for Claude Code CLI MCP server configuration
+
+class ClaudeCliUninstaller
+  def run
+    puts "🗑️  Magi Archive MCP Server - Claude Code CLI Uninstaller"
+    puts ""
+
+    # Check if claude command exists
+    unless system("which claude > /dev/null 2>&1") || system("where claude > NUL 2>&1")
+      puts "❌ Error: 'claude' command not found"
+      puts "Claude Code CLI may not be installed"
+      exit 1
+    end
+
+    # Check if magi-archive is installed in any scope
+    puts "🔍 Checking for installed MCP servers..."
+    output = `claude mcp list 2>&1`
+
+    unless output.include?("magi-archive")
+      puts "✅ Magi Archive server not found - nothing to uninstall"
+      exit 0
+    end
+
+    puts ""
+    puts "Found Magi Archive server in Claude Code CLI configuration"
+    print "Remove from all scopes (user, local, project)? (y/N): "
+    response = gets.chomp.downcase
+
+    unless response == "y" || response == "yes"
+      puts "❌ Cancelled - no changes made"
+      exit 0
+    end
+
+    # Remove from all scopes
+    puts ""
+    puts "🗑️  Removing Magi Archive server from all scopes..."
+
+    scopes = ["user", "local", "project"]
+    removed_any = false
+
+    scopes.each do |scope|
+      print "  Checking #{scope} scope... "
+      if system("claude mcp remove --scope #{scope} magi-archive > /dev/null 2>&1")
+        puts "✓ removed"
+        removed_any = true
+      else
+        puts "not found"
+      end
+    end
+
+    puts ""
+    if removed_any
+      puts "✅ Magi Archive server configuration removed"
+      puts ""
+      puts "Verify removal:"
+      puts "  claude mcp list"
+      puts ""
+      puts "To reinstall:"
+      puts "  bin/install-claude-cli"
+    else
+      puts "⚠️  No servers were removed (may already be uninstalled)"
+    end
+  end
+end
+
+# Run the uninstaller
+ClaudeCliUninstaller.new.run

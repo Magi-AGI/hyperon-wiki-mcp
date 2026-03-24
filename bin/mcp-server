@@ -1,0 +1,164 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# MCP Server executable for Magi Archive
+# This server implements the Model Context Protocol to enable
+# Claude Desktop, Codex, and other MCP clients to interact with
+# the Magi Archive wiki.
+
+require "bundler/setup"
+require "mcp"
+
+# Configure JSON Schema validator before loading tools
+require_relative "../lib/magi/archive/mcp/schema_config"
+
+require_relative "../lib/magi/archive/mcp"
+
+# Load all MCP tool classes
+# Core card operations
+require_relative "../lib/magi/archive/mcp/server/tools/get_card"
+require_relative "../lib/magi/archive/mcp/server/tools/search_cards"
+require_relative "../lib/magi/archive/mcp/server/tools/create_card"
+require_relative "../lib/magi/archive/mcp/server/tools/update_card"
+require_relative "../lib/magi/archive/mcp/server/tools/delete_card"
+require_relative "../lib/magi/archive/mcp/server/tools/rename_card"
+require_relative "../lib/magi/archive/mcp/server/tools/list_children"
+
+# Tag operations
+require_relative "../lib/magi/archive/mcp/server/tools/get_tags"
+require_relative "../lib/magi/archive/mcp/server/tools/search_by_tags"
+require_relative "../lib/magi/archive/mcp/server/tools/suggest_tags"
+
+# Relationships
+require_relative "../lib/magi/archive/mcp/server/tools/get_relationships"
+
+
+# Types and rendering
+require_relative "../lib/magi/archive/mcp/server/tools/get_types"
+require_relative "../lib/magi/archive/mcp/server/tools/render_content"
+
+# Admin operations
+require_relative "../lib/magi/archive/mcp/server/tools/admin_backup"
+
+# Card history and restore
+require_relative "../lib/magi/archive/mcp/server/tools/get_card_history"
+require_relative "../lib/magi/archive/mcp/server/tools/get_revision"
+require_relative "../lib/magi/archive/mcp/server/tools/restore_card"
+require_relative "../lib/magi/archive/mcp/server/tools/list_trash"
+
+# Weekly summaries
+require_relative "../lib/magi/archive/mcp/server/tools/create_weekly_summary"
+
+# Health check
+require_relative "../lib/magi/archive/mcp/server/tools/health_check"
+
+# Phase 3: Advanced operations
+require_relative "../lib/magi/archive/mcp/server/tools/batch_cards"
+require_relative "../lib/magi/archive/mcp/server/tools/run_query"
+require_relative "../lib/magi/archive/mcp/server/tools/spoiler_scan"
+
+# Auto-linking
+require_relative "../lib/magi/archive/mcp/server/tools/auto_link"
+
+# Initialize the Magi Archive tools
+# This creates an authenticated client using environment variables:
+# - MCP_USERNAME + MCP_PASSWORD (recommended)
+# - OR MCP_API_KEY + MCP_ROLE
+magi_tools = begin
+  Magi::Archive::Mcp::Tools.new
+rescue StandardError => e
+  $stderr.puts "Error initializing Magi Archive tools: #{e.message}"
+  $stderr.puts "Please ensure you have configured authentication in .env or environment variables:"
+  $stderr.puts "  MCP_USERNAME=<your-username>"
+  $stderr.puts "  MCP_PASSWORD=<your-password>"
+  $stderr.puts "OR:"
+  $stderr.puts "  MCP_API_KEY=<your-api-key>"
+  $stderr.puts "  MCP_ROLE=user|gm|admin"
+  exit 1
+end
+
+# Get working directory from args or environment
+working_directory = ARGV[0] || ENV["MAGI_WORKING_DIR"] || Dir.pwd
+
+# Create server context with our tools instance
+server_context = {
+  magi_tools: magi_tools,
+  working_directory: working_directory
+}
+
+# Create the MCP server
+server = ::MCP::Server.new(
+  name: "magi-archive",
+  version: Magi::Archive::Mcp::VERSION,
+  tools: [
+    # Core card operations
+    Magi::Archive::Mcp::Server::Tools::GetCard,
+    Magi::Archive::Mcp::Server::Tools::SearchCards,
+    Magi::Archive::Mcp::Server::Tools::CreateCard,
+    Magi::Archive::Mcp::Server::Tools::UpdateCard,
+    Magi::Archive::Mcp::Server::Tools::DeleteCard,
+    Magi::Archive::Mcp::Server::Tools::RenameCard,
+    Magi::Archive::Mcp::Server::Tools::ListChildren,
+
+    # Tag operations
+    Magi::Archive::Mcp::Server::Tools::GetTags,
+    Magi::Archive::Mcp::Server::Tools::SearchByTags,
+    Magi::Archive::Mcp::Server::Tools::SuggestTags,
+
+    # Relationships
+    Magi::Archive::Mcp::Server::Tools::GetRelationships,
+
+
+    # Types and rendering
+    Magi::Archive::Mcp::Server::Tools::GetTypes,
+    Magi::Archive::Mcp::Server::Tools::RenderContent,
+
+    # Admin operations
+    Magi::Archive::Mcp::Server::Tools::AdminBackup,
+
+    # Card history and restore
+    Magi::Archive::Mcp::Server::Tools::GetCardHistory,
+    Magi::Archive::Mcp::Server::Tools::GetRevision,
+    Magi::Archive::Mcp::Server::Tools::RestoreCard,
+    Magi::Archive::Mcp::Server::Tools::ListTrash,
+
+    # Weekly summaries
+    Magi::Archive::Mcp::Server::Tools::CreateWeeklySummary,
+
+    # Health check
+    Magi::Archive::Mcp::Server::Tools::HealthCheck,
+
+    # Phase 3: Advanced operations
+    Magi::Archive::Mcp::Server::Tools::BatchCards,
+    Magi::Archive::Mcp::Server::Tools::RunQuery,
+    Magi::Archive::Mcp::Server::Tools::SpoilerScan,
+
+    # Auto-linking
+    Magi::Archive::Mcp::Server::Tools::AutoLink
+  ],
+  server_context: server_context
+)
+
+# Require the stdio transport
+require "mcp/server/transports/stdio_transport"
+
+# Set up stdio transport
+transport = ::MCP::Server::Transports::StdioTransport.new(server)
+
+# Log startup to stderr (stdio is for JSON-RPC communication)
+$stderr.puts "Magi Archive MCP Server v#{Magi::Archive::Mcp::VERSION}"
+$stderr.puts "Working directory: #{working_directory}"
+$stderr.puts "Authenticated as: #{magi_tools.client.config.username || 'API Key'}"
+$stderr.puts "Ready for MCP requests via stdio..."
+
+# Start the server
+begin
+  transport.open
+rescue Interrupt
+  $stderr.puts "\nShutting down gracefully..."
+  exit 0
+rescue StandardError => e
+  $stderr.puts "Fatal error: #{e.message}"
+  $stderr.puts e.backtrace.join("\n")
+  exit 1
+end

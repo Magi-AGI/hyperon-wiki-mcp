@@ -1,0 +1,75 @@
+AllCops:
+  TargetRubyVersion: 3.2
+  NewCops: enable
+  Exclude:
+    - 'vendor/**/*'
+    - 'tmp/**/*'
+    - 'bin/**/*'
+    - 'sig/**/*'
+
+# String literal style
+Style/StringLiterals:
+  EnforcedStyle: double_quotes
+
+Style/StringLiteralsInInterpolation:
+  EnforcedStyle: double_quotes
+
+# Documentation requirements
+Style/Documentation:
+  Enabled: false  # We have inline docs in key places, not every class
+
+# Metrics - reasonable limits
+Metrics/MethodLength:
+  Max: 25
+  Exclude:
+    - 'spec/**/*'
+
+Metrics/BlockLength:
+  Max: 25
+  Exclude:
+    - 'spec/**/*'
+    - '*.gemspec'
+
+Metrics/ClassLength:
+  Max: 250
+
+Metrics/ModuleLength:
+  Max: 250
+
+Metrics/AbcSize:
+  Max: 20
+  Exclude:
+    - 'spec/**/*'
+
+# Layout preferences
+Layout/LineLength:
+  Max: 120
+  Exclude:
+    - 'spec/**/*'
+
+# Allow compact module/class definitions
+Style/ClassAndModuleChildren:
+  Enabled: false
+
+# Allow both single and double quotes for consistency
+Style/QuotedSymbols:
+  Enabled: false
+
+# Prefer modern Hash syntax
+Style/HashSyntax:
+  EnforcedStyle: ruby19_no_mixed_keys
+
+# Numeric literals
+Style/NumericLiterals:
+  MinDigits: 6  # Only for very large numbers
+
+# Frozen string literal required
+Style/FrozenStringLiteralComment:
+  Enabled: true
+  EnforcedStyle: always
+
+# Allow short parameter names 'q' for query parameters and 'to' for format conversion
+Naming/MethodParameterName:
+  AllowedNames:
+    - q
+    - to

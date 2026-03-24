@@ -1,0 +1,230 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# OAuth credential generator for Hyperon Wiki MCP Server
+#
+# Generates OAuth 2.1 client credentials (client_id + client_secret) for use
+# with web/mobile MCP platforms like Claude.ai and ChatGPT.
+#
+# Usage: ruby bin/install-oauth
+
+require "bundler/setup"
+require "json"
+require "securerandom"
+require "io/console"
+
+require_relative "../lib/magi/archive/mcp"
+require_relative "../lib/magi/archive/mcp/oauth/token_issuer"
+require_relative "../lib/magi/archive/mcp/oauth/client_cards"
+
+class OAuthInstaller
+  PLATFORMS = {
+    "1" => { name: "Claude.ai", instructions: :claude_instructions },
+    "2" => { name: "ChatGPT", instructions: :chatgpt_instructions },
+    "3" => { name: "Other", instructions: :generic_instructions }
+  }.freeze
+
+  def initialize
+    @gem_root = File.expand_path("..", __dir__)
+  end
+
+  def run
+    puts "Hyperon Wiki MCP Server - OAuth Credential Generator"
+    puts "=" * 55
+    puts ""
+    puts "This creates OAuth credentials for web/mobile MCP platforms."
+    puts "For CLI tools (Gemini CLI, Claude Desktop, Codex), use bin/install-gemini instead."
+    puts ""
+
+    platform = select_platform
+    username, password = get_decko_credentials
+    role = authenticate_and_get_role(username, password)
+
+    puts ""
+    puts "Generating OAuth credentials..."
+    client_id = SecureRandom.uuid
+    client_secret = SecureRandom.hex(32)
+
+    create_oauth_client(client_id, client_secret, username, password, role, platform[:name])
+
+    display_credentials(client_id, client_secret, platform)
+    list_existing_clients(username)
+  rescue Interrupt
+    puts "\n\nCancelled."
+    exit 0
+  rescue StandardError => e
+    puts "\nError: #{e.message}"
+    exit 1
+  end
+
+  private
+
+  def select_platform
+    puts "Which platform will use these credentials?"
+    PLATFORMS.each do |key, platform|
+      puts "  #{key}) #{platform[:name]}"
+    end
+    print "\nSelect (1-3): "
+    choice = gets&.chomp || "3"
+    PLATFORMS[choice] || PLATFORMS["3"]
+  end
+
+  def get_decko_credentials
+    puts ""
+    puts "Enter your Decko (wiki.hyperon.dev) credentials:"
+    print "  Email: "
+    username = gets&.chomp
+    abort "Email is required" if username.nil? || username.empty?
+
+    print "  Password: "
+    password = read_password
+    puts ""
+    abort "Password is required" if password.nil? || password.empty?
+
+    [username, password]
+  end
+
+  def read_password
+    if $stdin.respond_to?(:noecho)
+      $stdin.noecho(&:gets)&.chomp
+    else
+      # Fallback for environments without noecho
+      warn "(password will be visible)"
+      gets&.chomp
+    end
+  end
+
+  def authenticate_and_get_role(username, password)
+    puts ""
+    puts "Authenticating with Decko..."
+
+    # Set up env for Config to work
+    ENV["MCP_USERNAME"] = username
+    ENV["MCP_PASSWORD"] = password
+    ENV["DECKO_API_BASE_URL"] ||= "https://wiki.hyperon.dev/api/mcp"
+
+    config = Magi::Archive::Mcp::Config.new
+    auth = Magi::Archive::Mcp::Auth.new(config)
+
+    # Authenticate to verify credentials and discover role
+    jwt_token = auth.token
+    decko_username = auth.username
+
+    # Extract actual role from JWT claims (Decko auto-determines max role)
+    claims = JWT.decode(jwt_token, nil, false)[0]
+    actual_role = claims["role"] || config.role
+
+    puts "  Authenticated as: #{decko_username || username}"
+    puts "  Role: #{actual_role}"
+
+    actual_role
+  end
+
+  def create_oauth_client(client_id, client_secret, username, password, role, platform_name)
+    # Create a Tools instance with the authenticated user
+    tools = Magi::Archive::Mcp::Tools.new
+
+    # Create TokenIssuer to get encryption key
+    token_issuer = Magi::Archive::Mcp::OAuth::TokenIssuer.new
+
+    # Create client cards manager
+    client_cards = Magi::Archive::Mcp::OAuth::ClientCards.new(
+      tools: tools,
+      encryption_key: token_issuer.encryption_key
+    )
+
+    client_cards.create_client(
+      client_id: client_id,
+      client_secret: client_secret,
+      username: username,
+      password: password,
+      role: role,
+      client_name: platform_name
+    )
+
+    puts "  OAuth client card created on Decko"
+  end
+
+  def display_credentials(client_id, client_secret, platform)
+    puts ""
+    puts "=" * 55
+    puts "OAuth Credentials Generated Successfully!"
+    puts "=" * 55
+    puts ""
+    puts "  Client ID:     #{client_id}"
+    puts "  Client Secret:  #{client_secret}"
+    puts ""
+    puts "  MCP Server URL: https://mcp.hyperon.dev"
+    puts ""
+    puts "IMPORTANT: Save these credentials now. The client secret"
+    puts "cannot be retrieved later (it is stored hashed)."
+    puts ""
+
+    send(platform[:instructions])
+  end
+
+  def claude_instructions
+    puts "Setup for Claude.ai:"
+    puts "-" * 40
+    puts "  1. Go to claude.ai -> Settings -> Connectors"
+    puts "  2. Click 'Add MCP Server'"
+    puts "  3. Enter the MCP Server URL: https://mcp.hyperon.dev"
+    puts "  4. Enter your Client ID and Client Secret"
+    puts "  5. Save and verify the tools appear"
+    puts ""
+  end
+
+  def chatgpt_instructions
+    puts "Setup for ChatGPT:"
+    puts "-" * 40
+    puts "  1. Go to ChatGPT -> Settings -> Actions"
+    puts "  2. Click 'Add MCP Server'"
+    puts "  3. Enter the MCP Server URL: https://mcp.hyperon.dev"
+    puts "  4. Enter your Client ID and Client Secret"
+    puts "  5. Save and verify the tools appear"
+    puts ""
+  end
+
+  def generic_instructions
+    puts "Setup for your MCP client:"
+    puts "-" * 40
+    puts "  Server URL:    https://mcp.hyperon.dev"
+    puts "  Auth Type:     OAuth 2.1 (client_credentials)"
+    puts "  Token URL:     https://mcp.hyperon.dev/token"
+    puts "  Grant Type:    client_credentials"
+    puts ""
+    puts "  Your client should POST to /token with:"
+    puts "    grant_type=client_credentials"
+    puts "    client_id=<your client_id>"
+    puts "    client_secret=<your client_secret>"
+    puts ""
+  end
+
+  def list_existing_clients(username)
+    puts "Your existing OAuth clients:"
+    puts "-" * 40
+
+    tools = Magi::Archive::Mcp::Tools.new
+    token_issuer = Magi::Archive::Mcp::OAuth::TokenIssuer.new
+    client_cards = Magi::Archive::Mcp::OAuth::ClientCards.new(
+      tools: tools,
+      encryption_key: token_issuer.encryption_key
+    )
+
+    clients = client_cards.list_clients(username: username)
+    if clients.empty?
+      puts "  (none found)"
+    else
+      clients.each do |client|
+        puts "  #{client[:client_id]} - #{client[:client_name]} (#{client[:role]}) - #{client[:created_at]}"
+      end
+    end
+    puts ""
+  rescue StandardError => e
+    puts "  Could not list clients: #{e.message}"
+    puts ""
+  end
+end
+
+# Run the installer
+OAuthInstaller.new.run

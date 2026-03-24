@@ -1,0 +1,39 @@
+# Test files
+spec/
+tmp/
+.rspec
+.rubocop.yml
+Rakefile
+
+# Development files
+.env
+.env.*
+*.swp
+*.swo
+*~
+
+# Documentation (keep README.md and MCP_SERVER.md)
+CLAUDE.md
+AGENTS.md
+MCP-SPEC.md
+PUBLISHING.md
+GEMINI.md
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# Build artifacts
+pkg/
+coverage/
+.bundle/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.sublime-*

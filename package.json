@@ -1,0 +1,49 @@
+{
+  "name": "@magi-agi/mcp-server",
+  "version": "0.1.0",
+  "description": "MCP server for Hyperon Wiki wiki - provides AI agents secure access to the Hyperon Wiki knowledge base",
+  "type": "module",
+  "bin": {
+    "hyperon-wiki-mcp": "bin/mcp-server-npm.js"
+  },
+  "scripts": {
+    "postinstall": "node scripts/check-ruby.js"
+  },
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "hyperon-wiki",
+    "decko",
+    "wiki",
+    "ai",
+    "knowledge-base"
+  ],
+  "author": "Magi AGI Project",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/your-org/hyperon-wiki-mcp.git"
+  },
+  "mcp": {
+    "server": {
+      "name": "hyperon-wiki",
+      "description": "Access the Hyperon Wiki wiki - search, create, and manage cards with role-based permissions",
+      "version": "0.1.0",
+      "capabilities": {
+        "tools": true
+      },
+      "authentication": {
+        "type": "api-key",
+        "description": "Requires MCP_USERNAME and MCP_PASSWORD or MCP_API_KEY environment variables"
+      }
+    }
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "os": [
+    "darwin",
+    "linux",
+    "win32"
+  ]
+}

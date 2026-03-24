@@ -1,0 +1,177 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Auto-installer for Claude Code CLI MCP server configuration
+#
+# This script automatically configures Claude Code CLI to use the
+# Hyperon Wiki MCP server using the 'claude mcp add' command
+
+require "fileutils"
+
+class ClaudeCliInstaller
+  def initialize
+    @server_path = File.expand_path("../mcp-server", __FILE__)
+    @gem_root = File.expand_path("../..", @server_path)
+  end
+
+  def run
+    puts "🚀 Hyperon Wiki MCP Server - Claude Code CLI Installer"
+    puts ""
+
+    # Check if server script exists
+    unless File.exist?(@server_path)
+      puts "❌ Error: MCP server not found at #{@server_path}"
+      puts "Please run 'bundle install' first"
+      exit 1
+    end
+
+    # Make server executable
+    FileUtils.chmod(0755, @server_path)
+
+    # Check if claude command exists
+    unless system("which claude > /dev/null 2>&1") || system("where claude > NUL 2>&1")
+      puts "❌ Error: 'claude' command not found"
+      puts "Please install Claude Code CLI first:"
+      puts "  npm install -g @anthropic-ai/claude-code"
+      exit 1
+    end
+
+    puts ""
+
+    # Get authentication details
+    puts "🔐 Authentication Setup"
+    puts ""
+    puts "Choose authentication method:"
+    puts "  1) Username/Password (recommended)"
+    puts "  2) API Key"
+    print "\nSelect (1 or 2): "
+    auth_choice = gets.chomp
+
+    env_vars = if auth_choice == "1"
+                 get_username_password
+               else
+                 get_api_key
+               end
+
+    # Add working directory option
+    print "\nWorking directory for git repo scanning [#{Dir.pwd}]: "
+    working_dir = gets.chomp
+    working_dir = Dir.pwd if working_dir.empty?
+
+    # Build the claude mcp add command
+    puts ""
+    puts "📦 Registering MCP server with Claude Code CLI..."
+    puts ""
+
+    # Check if server already exists
+    output = `claude mcp list 2>&1`
+    if output.include?("hyperon-wiki")
+      puts "⚠️  Existing Hyperon Wiki server found"
+      puts ""
+      puts "Removing from all scopes..."
+
+      # Remove existing server if it exists (try all scopes)
+      scopes = ["user", "local", "project"]
+      scopes.each do |scope|
+        print "  Removing from #{scope} scope... "
+        if system("claude mcp remove --scope #{scope} hyperon-wiki 2>&1")
+          puts "✓"
+        else
+          puts "not found"
+        end
+      end
+      puts ""
+    end
+
+    # Build env flags
+    env_flags = []
+    env_vars.each do |key, value|
+      env_flags << "--env"
+      env_flags << "#{key}=#{value}"
+    end
+
+    # Add additional required env vars
+    env_flags << "--env"
+    env_flags << "DECKO_API_BASE_URL=https://wiki.hyperon.dev/api/mcp"
+    env_flags << "--env"
+    env_flags << "BUNDLE_GEMFILE=#{File.join(@gem_root, 'Gemfile')}"
+
+    # Build full command with user (global) scope
+    cmd = [
+      "claude", "mcp", "add",
+      "--scope", "user",
+      "--transport", "stdio",
+      "hyperon-wiki",
+      *env_flags,
+      "--",
+      "bundle", "exec", "ruby",
+      @server_path,
+      working_dir
+    ]
+
+    puts "Running: #{cmd.join(' ')}"
+    puts ""
+
+    success = system(*cmd)
+
+    if success
+      puts ""
+      puts "✅ Installation complete!"
+      puts ""
+      puts "Verify installation:"
+      puts "  claude mcp list"
+      puts ""
+      puts "Next steps:"
+      puts "  1. The Hyperon Wiki tools are now available in Claude Code"
+      puts "  2. Start a new conversation or use an existing one"
+      puts "  3. Try: 'Get the Main Page card from Hyperon Wiki'"
+      puts ""
+      puts "Available tools:"
+      puts "  - get_card, search_cards, create_card, update_card, delete_card"
+      puts "  - list_children, get_tags, search_by_tags"
+      puts "  - get_relationships, validate_card, get_recommendations"
+      puts "  - get_types, render_content, admin_backup"
+      puts "  - create_weekly_summary"
+    else
+      puts ""
+      puts "❌ Installation failed!"
+      puts "Please check the error messages above and try again."
+      exit 1
+    end
+  end
+
+  private
+
+  def get_username_password
+    print "Decko email address: "
+    username = gets.chomp
+
+    print "Decko password: "
+    # Hide password input
+    system "stty -echo" if STDIN.tty?
+    password = gets.chomp
+    system "stty echo" if STDIN.tty?
+    puts ""
+
+    {
+      "MCP_USERNAME" => username,
+      "MCP_PASSWORD" => password
+    }
+  end
+
+  def get_api_key
+    print "API Key: "
+    api_key = gets.chomp
+
+    print "Role (user/gm/admin): "
+    role = gets.chomp
+
+    {
+      "MCP_API_KEY" => api_key,
+      "MCP_ROLE" => role
+    }
+  end
+end
+
+# Run the installer
+ClaudeCliInstaller.new.run

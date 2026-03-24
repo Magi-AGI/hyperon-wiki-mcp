@@ -1,0 +1,19 @@
+[Unit]
+Description=Hyperon Wiki MCP HTTP Server
+After=network.target
+Requires=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/hyperon-wiki-mcp
+Environment="RAILS_ENV=production"
+EnvironmentFile=/home/ubuntu/hyperon-wiki-mcp/.env.production
+ExecStart=/home/ubuntu/.rbenv/shims/ruby /home/ubuntu/hyperon-wiki-mcp/bin/mcp-server-http
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

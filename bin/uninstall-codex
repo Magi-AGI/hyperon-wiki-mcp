@@ -1,0 +1,62 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Uninstaller for Codex CLI MCP server configuration
+
+class CodexUninstaller
+  def run
+    puts "🗑️  Magi Archive MCP Server - Codex CLI Uninstaller"
+    puts ""
+
+    # Check if codex command exists
+    unless system("which codex > /dev/null 2>&1") || system("where codex > NUL 2>&1")
+      puts "❌ Error: 'codex' command not found"
+      puts "Codex CLI may not be installed"
+      exit 1
+    end
+
+    # Check if magi-archive is installed
+    puts "🔍 Checking for installed MCP servers..."
+    output = `codex mcp list 2>&1`
+
+    unless output.include?("magi-archive")
+      puts "✅ Magi Archive server not found - nothing to uninstall"
+      exit 0
+    end
+
+    puts ""
+    puts "Found Magi Archive server in Codex CLI configuration"
+    print "Remove this server? (y/N): "
+    response = gets.chomp.downcase
+
+    unless response == "y" || response == "yes"
+      puts "❌ Cancelled - no changes made"
+      exit 0
+    end
+
+    # Remove the server
+    puts ""
+    print "🗑️  Removing Magi Archive server... "
+
+    if system("codex mcp remove magi-archive 2>&1")
+      puts "✓"
+      puts ""
+      puts "✅ Magi Archive server configuration removed"
+      puts ""
+      puts "Verify removal:"
+      puts "  codex mcp list"
+      puts ""
+      puts "To reinstall:"
+      puts "  bin/install-codex"
+    else
+      puts "✗"
+      puts ""
+      puts "❌ Failed to remove server"
+      puts "You may need to manually edit the Codex configuration"
+      exit 1
+    end
+  end
+end
+
+# Run the uninstaller
+CodexUninstaller.new.run

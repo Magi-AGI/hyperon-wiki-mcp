@@ -1,0 +1,649 @@
+E:/Ruby34-x64/lib/ruby/3.4.0/win32/registry.rb:2: warning: fiddle/import is found in fiddle, which will no longer be part of the default gems starting from Ruby 3.5.0.
+You can add fiddle to your Gemfile or gemspec to silence this warning.
+
+Magi::Archive::Mcp Contract Tests
+  GET /cards/:name
+    handles real card response shape
+  GET /cards/:name/children
+    handles real children response shape
+  POST /cards/batch
+    handles real batch response shape (HTTP 207 Multi-Status)
+  POST /render
+    handles real HTML→Markdown response shape
+  POST /render/markdown
+    handles real Markdown→HTML response shape
+  error responses
+    handles 404 Not Found with error message
+    handles 422 Validation Error with details
+
+Full API Integration
+  Authentication flow
+    successfully authenticates and returns JWT (PENDING: Integration tests disabled)
+    caches token and reuses it (PENDING: Integration tests disabled)
+  Health check
+    returns healthy status without authentication (PENDING: Integration tests disabled)
+  Card operations
+    creates, reads, updates, and deletes a card (PENDING: Integration tests disabled)
+  Batch operations
+    creates multiple cards in one request (PENDING: Integration tests disabled)
+    rolls back all operations in transactional mode on failure (PENDING: Integration tests disabled)
+  Spoiler scan
+    runs spoiler scan and creates results card (PENDING: Integration tests disabled)
+  Error handling
+    raises NotFoundError for non-existent card (PENDING: Integration tests disabled)
+    raises ValidationError for invalid card type (PENDING: Integration tests disabled)
+    raises AuthorizationError when user tries admin operation (PENDING: Integration tests disabled)
+  Retry logic
+    retries on 500 errors (PENDING: Integration tests disabled)
+    respects retry limits (PENDING: Integration tests disabled)
+  Production-like scenarios
+    handles compound card names correctly (PENDING: Integration tests disabled)
+    handles URL encoding in card names (PENDING: Integration tests disabled)
+
+Magi::Archive::Mcp::Auth
+  #initialize
+    initializes with config
+    initializes with nil token and cache
+  #fetch_jwks
+    when JWKS fetch succeeds
+      fetches and caches JWKS
+      uses cached JWKS on second call
+      refreshes cache when forced
+    when JWKS fetch fails
+      raises JWKSError
+    when JWKS response is invalid JSON
+      raises JWKSError
+  #token
+    fetches and caches token
+    returns cached token on second call
+    sets token expiry time
+  #token_valid?
+    returns false when no token exists
+    returns false when token is expired
+    returns false when token is within refresh buffer
+    returns true when token is valid and not within refresh buffer
+  #refresh_token!
+    clears existing token and fetches new one
+  #clear_cache!
+    clears all cached data
+  error handling
+    when auth endpoint returns 401
+      raises AuthenticationError with error code
+    when auth endpoint returns invalid JSON
+      raises AuthenticationError
+
+Magi::Archive::Mcp::Client
+  #initialize
+    initializes with config
+    creates auth instance
+    creates config if none provided
+  #get
+    makes GET request with authentication
+    includes query parameters
+  #post
+    makes POST request with JSON body
+  #patch
+    makes PATCH request with JSON body
+  #delete
+    makes DELETE request
+  #paginated_get
+    returns structured pagination data
+    enforces maximum limit of 100
+  #each_page
+    yields each page
+    returns enumerator without block
+  #fetch_all
+    fetches all items across pages
+  error handling
+    when API returns 401 Unauthorized
+      raises AuthenticationError
+    when API returns 403 Forbidden
+      raises AuthorizationError
+    when API returns 404 Not Found
+      raises NotFoundError
+    when API returns 422 Validation Error
+      raises ValidationError with details
+    when API returns 500 Server Error
+Retrying request after 1s (attempt 1/3)
+Retrying request after 2s (attempt 2/3)
+Retrying request after 4s (attempt 3/3)
+      raises ServerError
+
+Magi::Archive::Mcp::Config
+  #initialize
+    with valid configuration
+      loads configuration from environment
+    with missing credentials
+      raises ConfigurationError for missing both auth methods
+    with invalid role
+      raises ConfigurationError
+    with default values
+      uses defaults for optional settings
+    with GM role
+      loads GM role successfully
+    with admin role
+      loads admin role successfully
+  #url_for
+    constructs full URL from path
+    handles path without leading slash
+    handles auth endpoint
+  #auth_payload
+    for user role
+      returns payload with api_key and role only
+    for GM role
+      returns payload with api_key and role only
+    for admin role
+      returns payload with api_key and role only
+
+Magi::Archive::Mcp::Tools new features
+  #get_referers
+    returns cards that reference this card
+  #get_nested_in
+    returns cards that nest this card
+  #get_nests
+    returns cards that this card nests
+  #get_links
+    returns cards that this card links to
+  #get_linked_by
+    returns cards that link to this card
+  #search_by_tag
+    searches for cards with a specific tag
+  #search_by_tags
+    searches for cards with multiple tags (AND logic)
+  #search_by_tags_any
+    searches for cards with any of the specified tags (OR logic)
+  #get_all_tags
+    returns all tags in the system
+  #get_card_tags
+    when tags exist
+      returns tags for a card
+    when tags card doesn't exist
+      returns empty array
+  #parse_tags_from_content
+    parses tags from bracket format
+    parses tags from line-separated format
+    returns unique tags
+  #validate_card_tags
+    validates tags for a card type
+    includes content in validation
+  #validate_card_structure
+    validates card structure
+  #get_type_requirements
+    returns requirements for a card type
+  #create_card_with_validation
+    when validation passes
+      validates then creates the card and tags atomically
+    when validation fails
+      returns validation errors without creating
+    when batch transaction fails
+      returns error without creating partial data (FAILED - 1)
+  #recommend_card_structure
+    returns comprehensive structure recommendations
+  #suggest_card_improvements
+    analyzes existing card and suggests improvements
+  #download_database_backup
+    downloads database backup to file
+    returns backup content without save_path
+  #list_database_backups
+    lists all available backups
+  #download_database_backup_file
+    downloads specific backup file
+  #delete_database_backup
+    deletes a backup file
+
+Magi::Archive::Mcp::Tools
+  #initialize
+    initializes with client
+    creates client if none provided
+  #get_card
+    fetches card by name
+    with children
+      includes with_children parameter
+    with compound card name
+      encodes card name properly
+    when card not found
+      raises NotFoundError
+    when user lacks permission
+      raises AuthorizationError
+  #search_cards
+    searches cards with query
+    filters by type
+    uses custom limit and offset
+    combines query, type, and pagination
+  #list_children
+    lists children of parent card
+    uses custom limit and offset
+    when parent card not found
+      raises NotFoundError
+  #fetch_all_cards
+    fetches all cards across pages
+  #each_card_page
+    yields each page
+    returns enumerator without block
+  #create_card
+    creates card with name and content
+    creates card with type
+    creates card with metadata
+    when validation fails
+      raises ValidationError
+  #update_card
+    updates card content
+    updates card type
+    updates multiple fields
+    raises error when no parameters provided
+    when card not found
+      raises NotFoundError
+  #delete_card
+    deletes card
+    force deletes card with children
+    when card not found
+      raises NotFoundError
+    when user lacks permission
+      raises AuthorizationError
+  #list_types
+    lists card types
+    uses custom limit and offset
+  #fetch_all_types
+    fetches all types across pages
+  #render_snippet
+    HTML to Markdown
+      converts HTML to Markdown
+    Markdown to HTML
+      converts Markdown to HTML
+    with invalid formats
+      raises ArgumentError for invalid from format
+      raises ArgumentError for invalid to format
+      raises ArgumentError when from and to are the same
+  #batch_operations
+    executes batch operations in per_item mode
+    executes batch operations in transactional mode
+    raises ArgumentError for invalid mode
+    with partial failures
+      returns partial results
+  #build_child_op
+    builds operation for child card
+    includes type when provided
+    works without content or type
+    can be used with batch_operations
+
+Magi::Archive::Mcp::Tools weekly summary
+  #get_recent_changes
+    fetches cards updated in the last 7 days by default (FAILED - 2)
+    supports custom date range (FAILED - 3)
+    handles pagination to fetch all results (FAILED - 4)
+    sorts results by updated_at descending (FAILED - 5)
+    prevents infinite loops with pagination safety counter (FAILED - 6)
+  #scan_git_repos
+    finds git repositories in the base path (FAILED - 7)
+    excludes repositories with no recent commits (FAILED - 8)
+    includes repositories with recent commits (FAILED - 9)
+Git log timed out for C:/Users/Lake/AppData/Local/Temp/test-repo-3413. Skipping this repo.
+    handles git command timeout gracefully
+    uses Open3.capture3 with timeout for git commands
+  #format_weekly_summary
+    generates markdown with title and executive summary (FAILED - 10)
+    includes wiki card updates section (FAILED - 11)
+    groups card updates by parent (FAILED - 12)
+    includes repository changes section (FAILED - 13)
+    includes next steps section (FAILED - 14)
+    supports custom title (FAILED - 15)
+    supports custom executive summary (FAILED - 16)
+    handles empty card changes (FAILED - 17)
+    handles empty repository changes (FAILED - 18)
+  #create_weekly_summary
+    returns markdown content when create_card is false (FAILED - 19)
+    creates a weekly summary card (FAILED - 20)
+    supports custom date (FAILED - 21)
+    supports custom executive summary (FAILED - 22)
+    scans repositories from specified base path (FAILED - 23)
+    supports custom lookback period (FAILED - 24)
+  private helper methods
+    #parse_time
+      parses string dates
+      returns Time objects unchanged
+    #find_git_repos
+      finds git repo in base directory
+      finds git repos in subdirectories
+    #format_card_changes
+      groups cards by parent
+      includes update dates
+    #format_repo_changes
+      formats repository sections
+      lists commits with details
+      limits commit list to 10 with overflow message
+    #format_date
+      formats ISO8601 dates
+      returns original string on parse failure
+
+Magi::Archive::Mcp
+  has a version number
+
+Pending: (Failures listed here are expected and do not affect your suite's status)
+
+  1) Full API Integration Authentication flow successfully authenticates and returns JWT
+     # Integration tests disabled
+     # ./spec/integration/full_api_integration_spec.rb:31
+
+  2) Full API Integration Authentication flow caches token and reuses it
+     # Integration tests disabled
+     # ./spec/integration/full_api_integration_spec.rb:42
+
+  3) Full API Integration Health check returns healthy status without authentication
+     # Integration tests disabled
+     # ./spec/integration/full_api_integration_spec.rb:53
+
+  4) Full API Integration Card operations creates, reads, updates, and deletes a card
+     # Integration tests disabled
+     # ./spec/integration/full_api_integration_spec.rb:77
+
+  5) Full API Integration Batch operations creates multiple cards in one request
+     # Integration tests disabled
+     # ./spec/integration/full_api_integration_spec.rb:120
+
+  6) Full API Integration Batch operations rolls back all operations in transactional mode on failure
+     # Integration tests disabled
+     # ./spec/integration/full_api_integration_spec.rb:138
+
+  7) Full API Integration Spoiler scan runs spoiler scan and creates results card
+     # Integration tests disabled
+     # ./spec/integration/full_api_integration_spec.rb:184
+
+  8) Full API Integration Error handling raises NotFoundError for non-existent card
+     # Integration tests disabled
+     # ./spec/integration/full_api_integration_spec.rb:204
+
+  9) Full API Integration Error handling raises ValidationError for invalid card type
+     # Integration tests disabled
+     # ./spec/integration/full_api_integration_spec.rb:210
+
+  10) Full API Integration Error handling raises AuthorizationError when user tries admin operation
+     # Integration tests disabled
+     # ./spec/integration/full_api_integration_spec.rb:220
+
+  11) Full API Integration Retry logic retries on 500 errors
+     # Integration tests disabled
+     # ./spec/integration/full_api_integration_spec.rb:234
+
+  12) Full API Integration Retry logic respects retry limits
+     # Integration tests disabled
+     # ./spec/integration/full_api_integration_spec.rb:243
+
+  13) Full API Integration Production-like scenarios handles compound card names correctly
+     # Integration tests disabled
+     # ./spec/integration/full_api_integration_spec.rb:264
+
+  14) Full API Integration Production-like scenarios handles URL encoding in card names
+     # Integration tests disabled
+     # ./spec/integration/full_api_integration_spec.rb:284
+
+Failures:
+
+  1) Magi::Archive::Mcp::Tools new features #create_card_with_validation when batch transaction fails returns error without creating partial data
+     Failure/Error:
+       raise error_class.new(
+         message,
+         status: response.code,
+         error_code: error_code,
+         details: details
+       )
+
+     Magi::Archive::Mcp::Client::APIError:
+       Transaction failed: Card name already exists
+     # ./lib/magi/archive/mcp/client.rb:330:in 'Magi::Archive::Mcp::Client#handle_client_error'
+     # ./lib/magi/archive/mcp/client.rb:293:in 'Magi::Archive::Mcp::Client#handle_response'
+     # ./lib/magi/archive/mcp/client.rb:274:in 'Magi::Archive::Mcp::Client#request'
+     # ./lib/magi/archive/mcp/client.rb:82:in 'Magi::Archive::Mcp::Client#post'
+     # ./lib/magi/archive/mcp/tools.rb:357:in 'Magi::Archive::Mcp::Tools#batch_operations'
+     # ./lib/magi/archive/mcp/tools.rb:534:in 'Magi::Archive::Mcp::Tools#create_card_with_validation'
+     # ./spec/magi/archive/mcp/tools_new_features_spec.rb:391:in 'block (4 levels) in <top (required)>'
+     # ./vendor/bundle/ruby/3.4.0/gems/webmock-3.26.1/lib/webmock/rspec.rb:39:in 'block (2 levels) in <top (required)>'
+     # C:/Users/Lake/AppData/Local/Microsoft/WindowsApps/rspec:25:in '<main>'
+
+  2) Magi::Archive::Mcp::Tools weekly summary #get_recent_changes fetches cards updated in the last 7 days by default
+     Failure/Error: result = tools.get_recent_changes
+
+     NoMethodError:
+       private method 'get_recent_changes' called for an instance of Magi::Archive::Mcp::Tools
+     # ./spec/magi/archive/mcp/tools_weekly_summary_spec.rb:61:in 'block (3 levels) in <top (required)>'
+     # ./vendor/bundle/ruby/3.4.0/gems/webmock-3.26.1/lib/webmock/rspec.rb:39:in 'block (2 levels) in <top (required)>'
+     # C:/Users/Lake/AppData/Local/Microsoft/WindowsApps/rspec:25:in '<main>'
+
+  3) Magi::Archive::Mcp::Tools weekly summary #get_recent_changes supports custom date range
+     Failure/Error: result = tools.get_recent_changes(since: "2025-11-25", before: "2025-12-02")
+
+     NoMethodError:
+       private method 'get_recent_changes' called for an instance of Magi::Archive::Mcp::Tools
+     # ./spec/magi/archive/mcp/tools_weekly_summary_spec.rb:82:in 'block (3 levels) in <top (required)>'
+     # ./vendor/bundle/ruby/3.4.0/gems/webmock-3.26.1/lib/webmock/rspec.rb:39:in 'block (2 levels) in <top (required)>'
+     # C:/Users/Lake/AppData/Local/Microsoft/WindowsApps/rspec:25:in '<main>'
+
+  4) Magi::Archive::Mcp::Tools weekly summary #get_recent_changes handles pagination to fetch all results
+     Failure/Error: result = tools.get_recent_changes
+
+     NoMethodError:
+       private method 'get_recent_changes' called for an instance of Magi::Archive::Mcp::Tools
+     # ./spec/magi/archive/mcp/tools_weekly_summary_spec.rb:99:in 'block (3 levels) in <top (required)>'
+     # ./vendor/bundle/ruby/3.4.0/gems/webmock-3.26.1/lib/webmock/rspec.rb:39:in 'block (2 levels) in <top (required)>'
+     # C:/Users/Lake/AppData/Local/Microsoft/WindowsApps/rspec:25:in '<main>'
+
+  5) Magi::Archive::Mcp::Tools weekly summary #get_recent_changes sorts results by updated_at descending
+     Failure/Error: result = tools.get_recent_changes
+
+     NoMethodError:
+       private method 'get_recent_changes' called for an instance of Magi::Archive::Mcp::Tools
+     # ./spec/magi/archive/mcp/tools_weekly_summary_spec.rb:111:in 'block (3 levels) in <top (required)>'
+     # ./vendor/bundle/ruby/3.4.0/gems/webmock-3.26.1/lib/webmock/rspec.rb:39:in 'block (2 levels) in <top (required)>'
+     # C:/Users/Lake/AppData/Local/Microsoft/WindowsApps/rspec:25:in '<main>'
+
+  6) Magi::Archive::Mcp::Tools weekly summary #get_recent_changes prevents infinite loops with pagination safety counter
+     Failure/Error: expect { result = tools.get_recent_changes }.to output(/Pagination safety limit reached/).to_stderr
+
+     NoMethodError:
+       private method 'get_recent_changes' called for an instance of Magi::Archive::Mcp::Tools
+     # ./spec/magi/archive/mcp/tools_weekly_summary_spec.rb:134:in 'block (4 levels) in <top (required)>'
+     # ./spec/magi/archive/mcp/tools_weekly_summary_spec.rb:134:in 'block (3 levels) in <top (required)>'
+     # ./vendor/bundle/ruby/3.4.0/gems/webmock-3.26.1/lib/webmock/rspec.rb:39:in 'block (2 levels) in <top (required)>'
+     # C:/Users/Lake/AppData/Local/Microsoft/WindowsApps/rspec:25:in '<main>'
+
+  7) Magi::Archive::Mcp::Tools weekly summary #scan_git_repos finds git repositories in the base path
+     Failure/Error: result = tools.scan_git_repos(base_path: Dir.tmpdir, days: 7)
+
+     NoMethodError:
+       private method 'scan_git_repos' called for #<Magi::Archive::Mcp::Tools:0x0000025d96ec4640>
+     # ./spec/magi/archive/mcp/tools_weekly_summary_spec.rb:156:in 'block (3 levels) in <top (required)>'
+     # ./vendor/bundle/ruby/3.4.0/gems/webmock-3.26.1/lib/webmock/rspec.rb:39:in 'block (2 levels) in <top (required)>'
+     # C:/Users/Lake/AppData/Local/Microsoft/WindowsApps/rspec:25:in '<main>'
+
+  8) Magi::Archive::Mcp::Tools weekly summary #scan_git_repos excludes repositories with no recent commits
+     Failure/Error: result = tools.scan_git_repos(base_path: Dir.tmpdir)
+
+     NoMethodError:
+       private method 'scan_git_repos' called for #<Magi::Archive::Mcp::Tools:0x0000025d96eafe20>
+     # ./spec/magi/archive/mcp/tools_weekly_summary_spec.rb:165:in 'block (3 levels) in <top (required)>'
+     # ./vendor/bundle/ruby/3.4.0/gems/webmock-3.26.1/lib/webmock/rspec.rb:39:in 'block (2 levels) in <top (required)>'
+     # C:/Users/Lake/AppData/Local/Microsoft/WindowsApps/rspec:25:in '<main>'
+
+  9) Magi::Archive::Mcp::Tools weekly summary #scan_git_repos includes repositories with recent commits
+     Failure/Error: result = tools.scan_git_repos(base_path: Dir.tmpdir)
+
+     NoMethodError:
+       private method 'scan_git_repos' called for #<Magi::Archive::Mcp::Tools:0x0000025d96eab550>
+     # ./spec/magi/archive/mcp/tools_weekly_summary_spec.rb:178:in 'block (3 levels) in <top (required)>'
+     # ./vendor/bundle/ruby/3.4.0/gems/webmock-3.26.1/lib/webmock/rspec.rb:39:in 'block (2 levels) in <top (required)>'
+     # C:/Users/Lake/AppData/Local/Microsoft/WindowsApps/rspec:25:in '<main>'
+
+  10) Magi::Archive::Mcp::Tools weekly summary #format_weekly_summary generates markdown with title and executive summary
+      Failure/Error: result = tools.format_weekly_summary(card_changes, repo_changes)
+
+      NoMethodError:
+        private method 'format_weekly_summary' called for an instance of Magi::Archive::Mcp::Tools
+      # ./spec/magi/archive/mcp/tools_weekly_summary_spec.rb:233:in 'block (3 levels) in <top (required)>'
+      # ./vendor/bundle/ruby/3.4.0/gems/webmock-3.26.1/lib/webmock/rspec.rb:39:in 'block (2 levels) in <top (required)>'
+      # C:/Users/Lake/AppData/Local/Microsoft/WindowsApps/rspec:25:in '<main>'
+
+  11) Magi::Archive::Mcp::Tools weekly summary #format_weekly_summary includes wiki card updates section
+      Failure/Error: result = tools.format_weekly_summary(card_changes, repo_changes)
+
+      NoMethodError:
+        private method 'format_weekly_summary' called for an instance of Magi::Archive::Mcp::Tools
+      # ./spec/magi/archive/mcp/tools_weekly_summary_spec.rb:240:in 'block (3 levels) in <top (required)>'
+      # ./vendor/bundle/ruby/3.4.0/gems/webmock-3.26.1/lib/webmock/rspec.rb:39:in 'block (2 levels) in <top (required)>'
+      # C:/Users/Lake/AppData/Local/Microsoft/WindowsApps/rspec:25:in '<main>'
+
+  12) Magi::Archive::Mcp::Tools weekly summary #format_weekly_summary groups card updates by parent
+      Failure/Error: result = tools.format_weekly_summary(card_changes, repo_changes)
+
+      NoMethodError:
+        private method 'format_weekly_summary' called for an instance of Magi::Archive::Mcp::Tools
+      # ./spec/magi/archive/mcp/tools_weekly_summary_spec.rb:248:in 'block (3 levels) in <top (required)>'
+      # ./vendor/bundle/ruby/3.4.0/gems/webmock-3.26.1/lib/webmock/rspec.rb:39:in 'block (2 levels) in <top (required)>'
+      # C:/Users/Lake/AppData/Local/Microsoft/WindowsApps/rspec:25:in '<main>'
+
+  13) Magi::Archive::Mcp::Tools weekly summary #format_weekly_summary includes repository changes section
+      Failure/Error: result = tools.format_weekly_summary(card_changes, repo_changes)
+
+      NoMethodError:
+        private method 'format_weekly_summary' called for an instance of Magi::Archive::Mcp::Tools
+      # ./spec/magi/archive/mcp/tools_weekly_summary_spec.rb:254:in 'block (3 levels) in <top (required)>'
+      # ./vendor/bundle/ruby/3.4.0/gems/webmock-3.26.1/lib/webmock/rspec.rb:39:in 'block (2 levels) in <top (required)>'
+      # C:/Users/Lake/AppData/Local/Microsoft/WindowsApps/rspec:25:in '<main>'
+
+  14) Magi::Archive::Mcp::Tools weekly summary #format_weekly_summary includes next steps section
+      Failure/Error: result = tools.format_weekly_summary(card_changes, repo_changes)
+
+      NoMethodError:
+        private method 'format_weekly_summary' called for an instance of Magi::Archive::Mcp::Tools
+      # ./spec/magi/archive/mcp/tools_weekly_summary_spec.rb:264:in 'block (3 levels) in <top (required)>'
+      # ./vendor/bundle/ruby/3.4.0/gems/webmock-3.26.1/lib/webmock/rspec.rb:39:in 'block (2 levels) in <top (required)>'
+      # C:/Users/Lake/AppData/Local/Microsoft/WindowsApps/rspec:25:in '<main>'
+
+  15) Magi::Archive::Mcp::Tools weekly summary #format_weekly_summary supports custom title
+      Failure/Error:
+        result = tools.format_weekly_summary(
+          card_changes,
+          repo_changes,
+          title: "Custom Weekly Summary 2025 12 09"
+        )
+
+      NoMethodError:
+        private method 'format_weekly_summary' called for an instance of Magi::Archive::Mcp::Tools
+      # ./spec/magi/archive/mcp/tools_weekly_summary_spec.rb:270:in 'block (3 levels) in <top (required)>'
+      # ./vendor/bundle/ruby/3.4.0/gems/webmock-3.26.1/lib/webmock/rspec.rb:39:in 'block (2 levels) in <top (required)>'
+      # C:/Users/Lake/AppData/Local/Microsoft/WindowsApps/rspec:25:in '<main>'
+
+  16) Magi::Archive::Mcp::Tools weekly summary #format_weekly_summary supports custom executive summary
+      Failure/Error:
+        result = tools.format_weekly_summary(
+          card_changes,
+          repo_changes,
+          executive_summary: custom_summary
+        )
+
+      NoMethodError:
+        private method 'format_weekly_summary' called for an instance of Magi::Archive::Mcp::Tools
+      # ./spec/magi/archive/mcp/tools_weekly_summary_spec.rb:281:in 'block (3 levels) in <top (required)>'
+      # ./vendor/bundle/ruby/3.4.0/gems/webmock-3.26.1/lib/webmock/rspec.rb:39:in 'block (2 levels) in <top (required)>'
+      # C:/Users/Lake/AppData/Local/Microsoft/WindowsApps/rspec:25:in '<main>'
+
+  17) Magi::Archive::Mcp::Tools weekly summary #format_weekly_summary handles empty card changes
+      Failure/Error: result = tools.format_weekly_summary([], repo_changes)
+
+      NoMethodError:
+        private method 'format_weekly_summary' called for an instance of Magi::Archive::Mcp::Tools
+      # ./spec/magi/archive/mcp/tools_weekly_summary_spec.rb:291:in 'block (3 levels) in <top (required)>'
+      # ./vendor/bundle/ruby/3.4.0/gems/webmock-3.26.1/lib/webmock/rspec.rb:39:in 'block (2 levels) in <top (required)>'
+      # C:/Users/Lake/AppData/Local/Microsoft/WindowsApps/rspec:25:in '<main>'
+
+  18) Magi::Archive::Mcp::Tools weekly summary #format_weekly_summary handles empty repository changes
+      Failure/Error: result = tools.format_weekly_summary(card_changes, {})
+
+      NoMethodError:
+        private method 'format_weekly_summary' called for an instance of Magi::Archive::Mcp::Tools
+      # ./spec/magi/archive/mcp/tools_weekly_summary_spec.rb:298:in 'block (3 levels) in <top (required)>'
+      # ./vendor/bundle/ruby/3.4.0/gems/webmock-3.26.1/lib/webmock/rspec.rb:39:in 'block (2 levels) in <top (required)>'
+      # C:/Users/Lake/AppData/Local/Microsoft/WindowsApps/rspec:25:in '<main>'
+
+  19) Magi::Archive::Mcp::Tools weekly summary #create_weekly_summary returns markdown content when create_card is false
+      Failure/Error: result = tools.create_weekly_summary(create_card: false)
+
+      NoMethodError:
+        private method 'create_weekly_summary' called for #<Magi::Archive::Mcp::Tools:0x0000025d96fab180>
+      # ./spec/magi/archive/mcp/tools_weekly_summary_spec.rb:320:in 'block (3 levels) in <top (required)>'
+      # ./vendor/bundle/ruby/3.4.0/gems/webmock-3.26.1/lib/webmock/rspec.rb:39:in 'block (2 levels) in <top (required)>'
+      # C:/Users/Lake/AppData/Local/Microsoft/WindowsApps/rspec:25:in '<main>'
+
+  20) Magi::Archive::Mcp::Tools weekly summary #create_weekly_summary creates a weekly summary card
+      Failure/Error: result = tools.create_weekly_summary
+
+      NoMethodError:
+        private method 'create_weekly_summary' called for #<Magi::Archive::Mcp::Tools:0x0000025d96fa6ba8>
+      # ./spec/magi/archive/mcp/tools_weekly_summary_spec.rb:346:in 'block (3 levels) in <top (required)>'
+      # ./vendor/bundle/ruby/3.4.0/gems/webmock-3.26.1/lib/webmock/rspec.rb:39:in 'block (2 levels) in <top (required)>'
+      # C:/Users/Lake/AppData/Local/Microsoft/WindowsApps/rspec:25:in '<main>'
+
+  21) Magi::Archive::Mcp::Tools weekly summary #create_weekly_summary supports custom date
+      Failure/Error: result = tools.create_weekly_summary(date: "2025 12 09")
+
+      NoMethodError:
+        private method 'create_weekly_summary' called for #<Magi::Archive::Mcp::Tools:0x0000025d96fa1658>
+      # ./spec/magi/archive/mcp/tools_weekly_summary_spec.rb:360:in 'block (3 levels) in <top (required)>'
+      # ./vendor/bundle/ruby/3.4.0/gems/webmock-3.26.1/lib/webmock/rspec.rb:39:in 'block (2 levels) in <top (required)>'
+      # C:/Users/Lake/AppData/Local/Microsoft/WindowsApps/rspec:25:in '<main>'
+
+  22) Magi::Archive::Mcp::Tools weekly summary #create_weekly_summary supports custom executive summary
+      Failure/Error: tools.create_weekly_summary(executive_summary: custom_summary)
+
+      NoMethodError:
+        private method 'create_weekly_summary' called for #<Magi::Archive::Mcp::Tools:0x0000025d96f8c640>
+      # ./spec/magi/archive/mcp/tools_weekly_summary_spec.rb:372:in 'block (3 levels) in <top (required)>'
+      # ./vendor/bundle/ruby/3.4.0/gems/webmock-3.26.1/lib/webmock/rspec.rb:39:in 'block (2 levels) in <top (required)>'
+      # C:/Users/Lake/AppData/Local/Microsoft/WindowsApps/rspec:25:in '<main>'
+
+  23) Magi::Archive::Mcp::Tools weekly summary #create_weekly_summary scans repositories from specified base path
+      Failure/Error: tools.create_weekly_summary(base_path: "/custom/path")
+
+      NoMethodError:
+        private method 'create_weekly_summary' called for #<Magi::Archive::Mcp::Tools:0x0000025d96f87230>
+      # ./spec/magi/archive/mcp/tools_weekly_summary_spec.rb:383:in 'block (3 levels) in <top (required)>'
+      # ./vendor/bundle/ruby/3.4.0/gems/webmock-3.26.1/lib/webmock/rspec.rb:39:in 'block (2 levels) in <top (required)>'
+      # C:/Users/Lake/AppData/Local/Microsoft/WindowsApps/rspec:25:in '<main>'
+
+  24) Magi::Archive::Mcp::Tools weekly summary #create_weekly_summary supports custom lookback period
+      Failure/Error: tools.create_weekly_summary(days: 14)
+
+      NoMethodError:
+        private method 'create_weekly_summary' called for #<Magi::Archive::Mcp::Tools:0x0000025d96f81f60>
+      # ./spec/magi/archive/mcp/tools_weekly_summary_spec.rb:392:in 'block (3 levels) in <top (required)>'
+      # ./vendor/bundle/ruby/3.4.0/gems/webmock-3.26.1/lib/webmock/rspec.rb:39:in 'block (2 levels) in <top (required)>'
+      # C:/Users/Lake/AppData/Local/Microsoft/WindowsApps/rspec:25:in '<main>'
+
+Finished in 7.25 seconds (files took 0.78066 seconds to load)
+180 examples, 24 failures, 14 pending
+
+Failed examples:
+
+rspec ./spec/magi/archive/mcp/tools_new_features_spec.rb:390 # Magi::Archive::Mcp::Tools new features #create_card_with_validation when batch transaction fails returns error without creating partial data
+rspec ./spec/magi/archive/mcp/tools_weekly_summary_spec.rb:45 # Magi::Archive::Mcp::Tools weekly summary #get_recent_changes fetches cards updated in the last 7 days by default
+rspec ./spec/magi/archive/mcp/tools_weekly_summary_spec.rb:68 # Magi::Archive::Mcp::Tools weekly summary #get_recent_changes supports custom date range
+rspec ./spec/magi/archive/mcp/tools_weekly_summary_spec.rb:87 # Magi::Archive::Mcp::Tools weekly summary #get_recent_changes handles pagination to fetch all results
+rspec ./spec/magi/archive/mcp/tools_weekly_summary_spec.rb:104 # Magi::Archive::Mcp::Tools weekly summary #get_recent_changes sorts results by updated_at descending
+rspec ./spec/magi/archive/mcp/tools_weekly_summary_spec.rb:117 # Magi::Archive::Mcp::Tools weekly summary #get_recent_changes prevents infinite loops with pagination safety counter
+rspec ./spec/magi/archive/mcp/tools_weekly_summary_spec.rb:153 # Magi::Archive::Mcp::Tools weekly summary #scan_git_repos finds git repositories in the base path
+rspec ./spec/magi/archive/mcp/tools_weekly_summary_spec.rb:161 # Magi::Archive::Mcp::Tools weekly summary #scan_git_repos excludes repositories with no recent commits
+rspec ./spec/magi/archive/mcp/tools_weekly_summary_spec.rb:170 # Magi::Archive::Mcp::Tools weekly summary #scan_git_repos includes repositories with recent commits
+rspec ./spec/magi/archive/mcp/tools_weekly_summary_spec.rb:232 # Magi::Archive::Mcp::Tools weekly summary #format_weekly_summary generates markdown with title and executive summary
+rspec ./spec/magi/archive/mcp/tools_weekly_summary_spec.rb:239 # Magi::Archive::Mcp::Tools weekly summary #format_weekly_summary includes wiki card updates section
+rspec ./spec/magi/archive/mcp/tools_weekly_summary_spec.rb:247 # Magi::Archive::Mcp::Tools weekly summary #format_weekly_summary groups card updates by parent
+rspec ./spec/magi/archive/mcp/tools_weekly_summary_spec.rb:253 # Magi::Archive::Mcp::Tools weekly summary #format_weekly_summary includes repository changes section
+rspec ./spec/magi/archive/mcp/tools_weekly_summary_spec.rb:263 # Magi::Archive::Mcp::Tools weekly summary #format_weekly_summary includes next steps section
+rspec ./spec/magi/archive/mcp/tools_weekly_summary_spec.rb:269 # Magi::Archive::Mcp::Tools weekly summary #format_weekly_summary supports custom title
+rspec ./spec/magi/archive/mcp/tools_weekly_summary_spec.rb:279 # Magi::Archive::Mcp::Tools weekly summary #format_weekly_summary supports custom executive summary
+rspec ./spec/magi/archive/mcp/tools_weekly_summary_spec.rb:290 # Magi::Archive::Mcp::Tools weekly summary #format_weekly_summary handles empty card changes
+rspec ./spec/magi/archive/mcp/tools_weekly_summary_spec.rb:297 # Magi::Archive::Mcp::Tools weekly summary #format_weekly_summary handles empty repository changes
+rspec ./spec/magi/archive/mcp/tools_weekly_summary_spec.rb:319 # Magi::Archive::Mcp::Tools weekly summary #create_weekly_summary returns markdown content when create_card is false
+rspec ./spec/magi/archive/mcp/tools_weekly_summary_spec.rb:327 # Magi::Archive::Mcp::Tools weekly summary #create_weekly_summary creates a weekly summary card
+rspec ./spec/magi/archive/mcp/tools_weekly_summary_spec.rb:352 # Magi::Archive::Mcp::Tools weekly summary #create_weekly_summary supports custom date
+rspec ./spec/magi/archive/mcp/tools_weekly_summary_spec.rb:365 # Magi::Archive::Mcp::Tools weekly summary #create_weekly_summary supports custom executive summary
+rspec ./spec/magi/archive/mcp/tools_weekly_summary_spec.rb:377 # Magi::Archive::Mcp::Tools weekly summary #create_weekly_summary scans repositories from specified base path
+rspec ./spec/magi/archive/mcp/tools_weekly_summary_spec.rb:386 # Magi::Archive::Mcp::Tools weekly summary #create_weekly_summary supports custom lookback period
+

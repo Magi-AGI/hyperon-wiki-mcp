@@ -1,0 +1,287 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require "magi/archive/mcp"
+require "optparse"
+require "json"
+
+# CLI for Magi Archive MCP Client
+module MagiArchiveMCP
+  class CLI
+    attr_reader :options, :command
+
+    def initialize(args)
+      @options = {
+        format: "pretty",
+        limit: 50,
+        offset: 0
+      }
+      @command = nil
+      parse_args(args)
+    end
+
+    def run
+      case command
+      when "get"
+        get_card
+      when "search"
+        search_cards
+      when "create"
+        create_card
+      when "update"
+        update_card
+      when "delete"
+        delete_card
+      when "types"
+        list_types
+      when "render"
+        render_snippet
+      when "children"
+        list_children
+      else
+        puts "Unknown command: #{command}"
+        puts "Run 'magi-archive-mcp --help' for usage"
+        exit 1
+      end
+    rescue Magi::Archive::Mcp::Client::NotFoundError => e
+      error("Not Found", e.message)
+    rescue Magi::Archive::Mcp::Client::AuthorizationError => e
+      error("Permission Denied", e.message)
+    rescue Magi::Archive::Mcp::Client::ValidationError => e
+      error("Validation Error", e.message, e.details)
+    rescue Magi::Archive::Mcp::Client::APIError => e
+      error("API Error", e.message)
+    rescue Magi::Archive::Mcp::Config::ConfigurationError => e
+      error("Configuration Error", e.message)
+    rescue StandardError => e
+      error("Error", e.message)
+      puts e.backtrace if options[:debug]
+    end
+
+    private
+
+    def tools
+      @tools ||= Magi::Archive::Mcp::Tools.new
+    end
+
+    def parse_args(args)
+      parser = OptionParser.new do |opts|
+        opts.banner = "Usage: magi-archive-mcp COMMAND [options]"
+        opts.separator ""
+        opts.separator "Commands:"
+        opts.separator "  get NAME              Get a card by name"
+        opts.separator "  search                Search for cards"
+        opts.separator "  create                Create a new card"
+        opts.separator "  update NAME           Update an existing card"
+        opts.separator "  delete NAME           Delete a card (admin only)"
+        opts.separator "  types                 List card types"
+        opts.separator "  render                Convert HTML/Markdown"
+        opts.separator "  children PARENT       List child cards"
+        opts.separator ""
+        opts.separator "Options:"
+
+        opts.on("-n", "--name NAME", "Card name") { |v| options[:name] = v }
+        opts.on("-q", "--query QUERY", "Search query") { |v| options[:query] = v }
+        opts.on("-t", "--type TYPE", "Card type") { |v| options[:type] = v }
+        opts.on("-c", "--content CONTENT", "Card content") { |v| options[:content] = v }
+        opts.on("-l", "--limit NUM", Integer, "Result limit (default: 50)") { |v| options[:limit] = v }
+        opts.on("-o", "--offset NUM", Integer, "Result offset (default: 0)") { |v| options[:offset] = v }
+        opts.on("-f", "--format FORMAT", %w[json pretty], "Output format (json|pretty)") { |v| options[:format] = v }
+        opts.on("--from FORMAT", %w[html markdown], "Source format for rendering") { |v| options[:from] = v.to_sym }
+        opts.on("--to FORMAT", %w[html markdown], "Target format for rendering") { |v| options[:to] = v.to_sym }
+        opts.on("--with-children", "Include children in get") { options[:with_children] = true }
+        opts.on("--force", "Force delete even with children") { options[:force] = true }
+        opts.on("--debug", "Show debug information") { options[:debug] = true }
+
+        opts.on("-h", "--help", "Show this help") do
+          puts opts
+          exit
+        end
+
+        opts.on("-v", "--version", "Show version") do
+          puts "Magi Archive MCP v#{Magi::Archive::Mcp::VERSION}"
+          exit
+        end
+      end
+
+      parser.parse!(args)
+      @command = args.shift
+    end
+
+    def get_card
+      name = options[:name] || ARGV.shift
+      unless name
+        puts "Error: Card name required"
+        puts "Usage: magi-archive-mcp get NAME [--with-children]"
+        exit 1
+      end
+
+      result = tools.get_card(name, with_children: options[:with_children])
+      output(result)
+    end
+
+    def search_cards
+      params = {}
+      params[:q] = options[:query] if options[:query]
+      params[:type] = options[:type] if options[:type]
+      params[:limit] = options[:limit]
+      params[:offset] = options[:offset]
+
+      result = tools.search_cards(**params)
+      output(result)
+    end
+
+    def create_card
+      unless options[:name]
+        puts "Error: Card name required"
+        puts "Usage: magi-archive-mcp create --name NAME [--type TYPE] [--content CONTENT]"
+        exit 1
+      end
+
+      params = {}
+      params[:content] = options[:content] if options[:content]
+      params[:type] = options[:type] if options[:type]
+
+      result = tools.create_card(options[:name], **params)
+      output(result)
+    end
+
+    def update_card
+      name = options[:name] || ARGV.shift
+      unless name
+        puts "Error: Card name required"
+        puts "Usage: magi-archive-mcp update NAME [--content CONTENT] [--type TYPE]"
+        exit 1
+      end
+
+      params = {}
+      params[:content] = options[:content] if options[:content]
+      params[:type] = options[:type] if options[:type]
+
+      if params.empty?
+        puts "Error: At least one update parameter required (--content or --type)"
+        exit 1
+      end
+
+      result = tools.update_card(name, **params)
+      output(result)
+    end
+
+    def delete_card
+      name = options[:name] || ARGV.shift
+      unless name
+        puts "Error: Card name required"
+        puts "Usage: magi-archive-mcp delete NAME [--force]"
+        exit 1
+      end
+
+      result = tools.delete_card(name, force: options[:force])
+      output(result)
+    end
+
+    def list_types
+      result = tools.list_types(limit: options[:limit], offset: options[:offset])
+      output(result)
+    end
+
+    def render_snippet
+      unless options[:from] && options[:to]
+        puts "Error: Both --from and --to formats required"
+        puts "Usage: magi-archive-mcp render --from FORMAT --to FORMAT --content CONTENT"
+        exit 1
+      end
+
+      unless options[:content]
+        puts "Error: Content required"
+        exit 1
+      end
+
+      result = tools.render_snippet(options[:content], from: options[:from], to: options[:to])
+      output(result)
+    end
+
+    def list_children
+      parent = options[:name] || ARGV.shift
+      unless parent
+        puts "Error: Parent card name required"
+        puts "Usage: magi-archive-mcp children PARENT [--limit NUM]"
+        exit 1
+      end
+
+      result = tools.list_children(parent, limit: options[:limit], offset: options[:offset])
+      output(result)
+    end
+
+    def output(data)
+      case options[:format]
+      when "json"
+        puts JSON.pretty_generate(data)
+      when "pretty"
+        pretty_print(data)
+      end
+    end
+
+    def pretty_print(data)
+      case data
+      when Hash
+        if data["card"]
+          print_card(data["card"])
+        elsif data["cards"]
+          print_cards(data["cards"], data["total"])
+        elsif data["types"]
+          print_types(data["types"], data["total"])
+        elsif data["rendered"]
+          puts data["rendered"]
+        else
+          puts JSON.pretty_generate(data)
+        end
+      when Array
+        data.each { |item| pretty_print(item) }
+      else
+        puts data.inspect
+      end
+    end
+
+    def print_card(card)
+      puts "-" * 80
+      puts "Name: #{card['name']}"
+      puts "Type: #{card['type']}" if card["type"]
+      puts "ID: #{card['id']}" if card["id"]
+      puts "URL: #{card['url']}" if card["url"]
+      puts "-" * 80
+      puts card["content"] if card["content"]
+      puts "-" * 80
+      puts "Children: #{card['children'].length}" if card["children"]
+    end
+
+    def print_cards(cards, total = nil)
+      puts "Found #{total || cards.length} card(s)"
+      puts "-" * 80
+      cards.each do |card|
+        puts "- #{card['name']} (#{card['type'] || 'Unknown'})"
+        puts "  #{card['content'][0..100]}..." if card["content"] && card["content"].length > 100
+        puts "  #{card['content']}" if card["content"] && card["content"].length <= 100
+      end
+      puts "-" * 80
+    end
+
+    def print_types(types, total = nil)
+      puts "Found #{total || types.length} type(s)"
+      puts "-" * 80
+      types.each do |type|
+        puts "- #{type['name']}"
+        puts "  ID: #{type['id']}" if type["id"]
+      end
+      puts "-" * 80
+    end
+
+    def error(title, message, details = nil)
+      puts "#{title}: #{message}"
+      puts "Details: #{JSON.pretty_generate(details)}" if details
+      exit 1
+    end
+  end
+end
+
+# Run CLI
+MagiArchiveMCP::CLI.new(ARGV).run

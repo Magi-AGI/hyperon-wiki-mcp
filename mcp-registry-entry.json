@@ -1,0 +1,111 @@
+{
+  "name": "@magi-agi/mcp-server",
+  "version": "0.1.0",
+  "description": "MCP server for Hyperon Wiki wiki - provides AI agents secure access to the Hyperon Wiki knowledge base",
+  "homepage": "https://wiki.hyperon.dev",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-org/hyperon-wiki-mcp"
+  },
+  "license": "MIT",
+  "author": "Magi AGI Project",
+  "categories": [
+    "knowledge-management",
+    "documentation",
+    "wiki"
+  ],
+  "installation": {
+    "npm": "@magi-agi/mcp-server"
+  },
+  "configuration": {
+    "required": {
+      "env": {
+        "MCP_USERNAME": {
+          "description": "Decko wiki username",
+          "type": "string"
+        },
+        "MCP_PASSWORD": {
+          "description": "Decko wiki password",
+          "type": "string",
+          "secret": true
+        }
+      }
+    },
+    "optional": {
+      "env": {
+        "DECKO_API_BASE_URL": {
+          "description": "API endpoint URL",
+          "type": "string",
+          "default": "https://wiki.hyperon.dev/api/mcp"
+        }
+      }
+    }
+  },
+  "capabilities": {
+    "tools": true,
+    "resources": false,
+    "prompts": false
+  },
+  "tools": [
+    {
+      "name": "get_card",
+      "description": "Fetch a card by name from the wiki"
+    },
+    {
+      "name": "search_cards",
+      "description": "Search for cards by query, type, or filters"
+    },
+    {
+      "name": "create_card",
+      "description": "Create a new card in the wiki"
+    },
+    {
+      "name": "update_card",
+      "description": "Update an existing card"
+    },
+    {
+      "name": "delete_card",
+      "description": "Delete a card (admin only)"
+    },
+    {
+      "name": "list_children",
+      "description": "List all child cards of a parent card"
+    },
+    {
+      "name": "get_tags",
+      "description": "Get all tags or tags for a specific card"
+    },
+    {
+      "name": "search_by_tags",
+      "description": "Search for cards by tags with AND or OR logic"
+    },
+    {
+      "name": "get_relationships",
+      "description": "Get relationship information for a card"
+    },
+    {
+      "name": "validate_card",
+      "description": "Validate a card's tags and structure"
+    },
+    {
+      "name": "get_recommendations",
+      "description": "Get structure recommendations for cards"
+    },
+    {
+      "name": "get_types",
+      "description": "List all card types available"
+    },
+    {
+      "name": "render_content",
+      "description": "Convert content between HTML and Markdown"
+    },
+    {
+      "name": "admin_backup",
+      "description": "Manage database backups (admin only)"
+    },
+    {
+      "name": "create_weekly_summary",
+      "description": "Generate weekly summary card combining wiki and repo activity"
+    }
+  ]
+}
