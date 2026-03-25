@@ -70,7 +70,7 @@ module IntegrationHelpers
       begin
         # Try to create a client and make a simple API call
         client = Hyperon::Wiki::Mcp::Client.new
-        client.get_card("Home")
+        client.health_check
         return true
       rescue StandardError => e
         # Server not ready yet or other error
