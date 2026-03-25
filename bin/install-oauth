@@ -36,6 +36,21 @@ class OAuthInstaller
     puts "For CLI tools (Gemini CLI, Claude Desktop, Codex), use bin/install-gemini instead."
     puts ""
 
+    # Check dependencies are installed
+    Dir.chdir(@gem_root) do
+      unless system("bundle check > /dev/null 2>&1") || system("bundle check > NUL 2>&1")
+        puts "📦 Installing dependencies..."
+        puts ""
+        unless system("bundle install")
+          puts ""
+          puts "❌ Error: 'bundle install' failed"
+          puts "Please resolve the errors above and try again."
+          exit 1
+        end
+        puts ""
+      end
+    end
+
     platform = select_platform
     username, password = get_decko_credentials
     role = authenticate_and_get_role(username, password)

@@ -28,6 +28,21 @@ class CodexInstaller
     # Make server executable
     FileUtils.chmod(0755, @server_path)
 
+    # Check dependencies are installed
+    Dir.chdir(@gem_root) do
+      unless system("bundle check > /dev/null 2>&1") || system("bundle check > NUL 2>&1")
+        puts "📦 Installing dependencies..."
+        puts ""
+        unless system("bundle install")
+          puts ""
+          puts "❌ Error: 'bundle install' failed"
+          puts "Please resolve the errors above and try again."
+          exit 1
+        end
+        puts ""
+      end
+    end
+
     # Check if codex command exists
     unless system("which codex > /dev/null 2>&1") || system("where codex > NUL 2>&1")
       puts "❌ Error: 'codex' command not found"
