@@ -14,7 +14,7 @@ RSpec.describe "Weekly Summary Integration", :integration do
   end
 
   describe "Weekly summary generation" do
-    let(:tools) { Magi::Archive::Mcp::Tools.new }
+    let(:tools) { Hyperon::Wiki::Mcp::Tools.new }
     let(:test_card_name) { "Weekly Summary Test #{Time.now.to_i}" }
 
     after do
@@ -138,7 +138,7 @@ RSpec.describe "Weekly Summary Integration", :integration do
   end
 
   describe "Error handling" do
-    let(:tools) { Magi::Archive::Mcp::Tools.new }
+    let(:tools) { Hyperon::Wiki::Mcp::Tools.new }
 
     it "handles missing git repositories gracefully" do
       result = tools.create_weekly_summary(
@@ -158,14 +158,14 @@ RSpec.describe "Weekly Summary Integration", :integration do
 
       # Try with user role
       ENV["MCP_ROLE"] = "user"
-      user_tools = Magi::Archive::Mcp::Tools.new
+      user_tools = Hyperon::Wiki::Mcp::Tools.new
 
       expect {
         user_tools.create_weekly_summary(
           create_card: true,
           days: 7
         )
-      }.to raise_error(Magi::Archive::Mcp::Auth::AuthenticationError)
+      }.to raise_error(Hyperon::Wiki::Mcp::Auth::AuthenticationError)
     end
   end
 end

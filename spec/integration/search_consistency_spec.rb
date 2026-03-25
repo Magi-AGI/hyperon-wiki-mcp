@@ -12,7 +12,7 @@ require_relative "../support/integration_helpers"
 #
 # Run with: INTEGRATION_TEST=true bundle exec rspec spec/integration/search_consistency_spec.rb
 RSpec.describe "Search Consistency", :integration do
-  let(:tools) { Magi::Archive::Mcp::Tools.new }
+  let(:tools) { Hyperon::Wiki::Mcp::Tools.new }
   let(:test_prefix) { "SearchConsistTest#{Time.now.to_i}" }
 
   before do

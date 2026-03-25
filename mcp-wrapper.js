@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * Node.js wrapper for Magi Archive MCP Server
+ * Node.js wrapper for Hyperon Wiki MCP Server
  *
  * This script allows Node.js/npm users to run the Ruby MCP server
  * without needing to know Ruby commands.

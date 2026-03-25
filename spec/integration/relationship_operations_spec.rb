@@ -14,7 +14,7 @@ RSpec.describe "Relationship Operations Integration", :integration do
   end
 
   describe "Card relationship queries" do
-    let(:tools) { Magi::Archive::Mcp::Tools.new }
+    let(:tools) { Hyperon::Wiki::Mcp::Tools.new }
     let(:parent_card) { "RelTestParent#{Time.now.to_i}" }
     let(:child_card) { "RelTestChild#{Time.now.to_i}" }
     let(:referrer_card) { "RelTestReferrer#{Time.now.to_i}" }
@@ -68,7 +68,7 @@ RSpec.describe "Relationship Operations Integration", :integration do
       it "raises NotFoundError for non-existent card" do
         expect {
           tools.get_referers("NonExistent#{Time.now.to_i}")
-        }.to raise_error(Magi::Archive::Mcp::Client::NotFoundError)
+        }.to raise_error(Hyperon::Wiki::Mcp::Client::NotFoundError)
       end
     end
 
@@ -166,7 +166,7 @@ RSpec.describe "Relationship Operations Integration", :integration do
   end
 
   describe "Relationship query edge cases" do
-    let(:tools) { Magi::Archive::Mcp::Tools.new }
+    let(:tools) { Hyperon::Wiki::Mcp::Tools.new }
 
     it "handles compound card names in relationships" do
       # Use a real card that likely exists
@@ -191,7 +191,7 @@ RSpec.describe "Relationship Operations Integration", :integration do
   end
 
   describe "Real production data relationships" do
-    let(:tools) { Magi::Archive::Mcp::Tools.new }
+    let(:tools) { Hyperon::Wiki::Mcp::Tools.new }
 
     it "finds referers for a well-known card" do
       # Games+Butterfly Galaxii is a well-known card with many referers

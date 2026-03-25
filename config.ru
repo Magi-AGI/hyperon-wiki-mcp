@@ -5,13 +5,13 @@ require 'bundler/setup'
 require 'mcp'
 require 'sinatra/base'
 require 'json'
-require_relative 'lib/magi/archive/mcp'
+require_relative 'lib/hyperon/wiki/mcp'
 
 # Load all tool classes (same as bin/mcp-server-http)
-Dir[File.join(__dir__, 'lib/magi/archive/mcp/server/tools/**/*.rb')].sort.each { |f| require f }
+Dir[File.join(__dir__, 'lib/hyperon/wiki/mcp/server/tools/**/*.rb')].sort.each { |f| require f }
 
 # Initialize tools
-magi_tools = Magi::Archive::Mcp::Tools.new
+magi_tools = Hyperon::Wiki::Mcp::Tools.new
 
 # Configuration
 PORT = ENV.fetch("MCP_SERVER_PORT", "3002").to_i
@@ -25,58 +25,58 @@ server_context = {
 
 # Create MCP server
 mcp_server = ::MCP::Server.new(
-  name: "magi-archive",
-  version: Magi::Archive::Mcp::VERSION,
+  name: "hyperon-wiki",
+  version: Hyperon::Wiki::Mcp::VERSION,
   tools: [
     # Core card operations
-    Magi::Archive::Mcp::Server::Tools::GetCard,
-    Magi::Archive::Mcp::Server::Tools::SearchCards,
-    Magi::Archive::Mcp::Server::Tools::CreateCard,
-    Magi::Archive::Mcp::Server::Tools::UpdateCard,
-    Magi::Archive::Mcp::Server::Tools::DeleteCard,
-    Magi::Archive::Mcp::Server::Tools::RenameCard,
-    Magi::Archive::Mcp::Server::Tools::ListChildren,
+    Hyperon::Wiki::Mcp::Server::Tools::GetCard,
+    Hyperon::Wiki::Mcp::Server::Tools::SearchCards,
+    Hyperon::Wiki::Mcp::Server::Tools::CreateCard,
+    Hyperon::Wiki::Mcp::Server::Tools::UpdateCard,
+    Hyperon::Wiki::Mcp::Server::Tools::DeleteCard,
+    Hyperon::Wiki::Mcp::Server::Tools::RenameCard,
+    Hyperon::Wiki::Mcp::Server::Tools::ListChildren,
 
     # Tag operations
-    Magi::Archive::Mcp::Server::Tools::GetTags,
-    Magi::Archive::Mcp::Server::Tools::SearchByTags,
-    Magi::Archive::Mcp::Server::Tools::SuggestTags,
+    Hyperon::Wiki::Mcp::Server::Tools::GetTags,
+    Hyperon::Wiki::Mcp::Server::Tools::SearchByTags,
+    Hyperon::Wiki::Mcp::Server::Tools::SuggestTags,
 
     # Relationships
-    Magi::Archive::Mcp::Server::Tools::GetRelationships,
+    Hyperon::Wiki::Mcp::Server::Tools::GetRelationships,
 
     # Types and rendering
-    Magi::Archive::Mcp::Server::Tools::GetTypes,
-    Magi::Archive::Mcp::Server::Tools::RenderContent,
+    Hyperon::Wiki::Mcp::Server::Tools::GetTypes,
+    Hyperon::Wiki::Mcp::Server::Tools::RenderContent,
 
     # Admin operations
-    Magi::Archive::Mcp::Server::Tools::AdminBackup,
+    Hyperon::Wiki::Mcp::Server::Tools::AdminBackup,
 
     # Card history and restore
-    Magi::Archive::Mcp::Server::Tools::GetCardHistory,
-    Magi::Archive::Mcp::Server::Tools::GetRevision,
-    Magi::Archive::Mcp::Server::Tools::RestoreCard,
-    Magi::Archive::Mcp::Server::Tools::ListTrash,
+    Hyperon::Wiki::Mcp::Server::Tools::GetCardHistory,
+    Hyperon::Wiki::Mcp::Server::Tools::GetRevision,
+    Hyperon::Wiki::Mcp::Server::Tools::RestoreCard,
+    Hyperon::Wiki::Mcp::Server::Tools::ListTrash,
 
     # Weekly summaries
-    Magi::Archive::Mcp::Server::Tools::CreateWeeklySummary,
+    Hyperon::Wiki::Mcp::Server::Tools::CreateWeeklySummary,
 
     # Health check
-    Magi::Archive::Mcp::Server::Tools::HealthCheck,
+    Hyperon::Wiki::Mcp::Server::Tools::HealthCheck,
 
     # Phase 3: Advanced operations
-    Magi::Archive::Mcp::Server::Tools::BatchCards,
-    Magi::Archive::Mcp::Server::Tools::RunQuery,
-    Magi::Archive::Mcp::Server::Tools::SpoilerScan,
+    Hyperon::Wiki::Mcp::Server::Tools::BatchCards,
+    Hyperon::Wiki::Mcp::Server::Tools::RunQuery,
+    Hyperon::Wiki::Mcp::Server::Tools::SpoilerScan,
 
     # Auto-linking
-    Magi::Archive::Mcp::Server::Tools::AutoLink
+    Hyperon::Wiki::Mcp::Server::Tools::AutoLink
   ],
   server_context: server_context
 )
 
 # Simple Sinatra app with NO middleware
-class MagiArchiveMcpApp < Sinatra::Base
+class HyperonWikiMcpApp < Sinatra::Base
   # CRITICAL: Disable ALL automatic middleware
   set :protection, false
   set :logging, false
@@ -91,7 +91,7 @@ class MagiArchiveMcpApp < Sinatra::Base
     content_type :json
     {
       status: "healthy",
-      version: Magi::Archive::Mcp::VERSION,
+      version: Hyperon::Wiki::Mcp::VERSION,
       timestamp: Time.now.iso8601
     }.to_json
   end
@@ -138,8 +138,8 @@ class MagiArchiveMcpApp < Sinatra::Base
   get '/' do
     content_type :json
     {
-      name: "magi-archive-mcp",
-      version: Magi::Archive::Mcp::VERSION,
+      name: "hyperon-wiki-mcp",
+      version: Hyperon::Wiki::Mcp::VERSION,
       protocol: "mcp",
       transport: "http/sse",
       endpoints: {
@@ -152,15 +152,15 @@ class MagiArchiveMcpApp < Sinatra::Base
   end
 end
 
-MagiArchiveMcpApp.mcp_server_instance = mcp_server
+HyperonWikiMcpApp.mcp_server_instance = mcp_server
 
 # Debug: Print middleware stack
 puts "=" * 80
 puts "MIDDLEWARE STACK:"
-MagiArchiveMcpApp.middleware.each_with_index do |middleware, i|
+HyperonWikiMcpApp.middleware.each_with_index do |middleware, i|
   puts "  #{i}. #{middleware.first} #{middleware[1..-1].inspect}"
 end
 puts "=" * 80
 
 # Run the app with ZERO middleware except what Sinatra::Base requires
-run MagiArchiveMcpApp
+run HyperonWikiMcpApp

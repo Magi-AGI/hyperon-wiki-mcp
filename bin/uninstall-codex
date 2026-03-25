@@ -5,7 +5,7 @@
 
 class CodexUninstaller
   def run
-    puts "🗑️  Magi Archive MCP Server - Codex CLI Uninstaller"
+    puts "🗑️  Hyperon Wiki MCP Server - Codex CLI Uninstaller"
     puts ""
 
     # Check if codex command exists
@@ -15,17 +15,17 @@ class CodexUninstaller
       exit 1
     end
 
-    # Check if magi-archive is installed
+    # Check if hyperon-wiki is installed
     puts "🔍 Checking for installed MCP servers..."
     output = `codex mcp list 2>&1`
 
-    unless output.include?("magi-archive")
-      puts "✅ Magi Archive server not found - nothing to uninstall"
+    unless output.include?("hyperon-wiki")
+      puts "✅ Hyperon Wiki server not found - nothing to uninstall"
       exit 0
     end
 
     puts ""
-    puts "Found Magi Archive server in Codex CLI configuration"
+    puts "Found Hyperon Wiki server in Codex CLI configuration"
     print "Remove this server? (y/N): "
     response = gets.chomp.downcase
 
@@ -36,12 +36,12 @@ class CodexUninstaller
 
     # Remove the server
     puts ""
-    print "🗑️  Removing Magi Archive server... "
+    print "🗑️  Removing Hyperon Wiki server... "
 
-    if system("codex mcp remove magi-archive 2>&1")
+    if system("codex mcp remove hyperon-wiki 2>&1")
       puts "✓"
       puts ""
-      puts "✅ Magi Archive server configuration removed"
+      puts "✅ Hyperon Wiki server configuration removed"
       puts ""
       puts "Verify removal:"
       puts "  codex mcp list"

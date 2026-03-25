@@ -4,7 +4,7 @@ require "spec_helper"
 require_relative "../support/integration_helpers"
 
 # Load MCP server tools
-Dir[File.join(__dir__, '../../lib/magi/archive/mcp/server/tools/**/*.rb')].sort.each { |f| require f }
+Dir[File.join(__dir__, '../../lib/hyperon/wiki/mcp/server/tools/**/*.rb')].sort.each { |f| require f }
 
 RSpec.describe "Pointer and Search Card Handling", :integration do
   # Integration tests for get_card tool with Pointer and Search card types
@@ -12,7 +12,7 @@ RSpec.describe "Pointer and Search Card Handling", :integration do
   #
   # Run with: INTEGRATION_TEST=true rspec spec/integration/pointer_search_card_spec.rb
 
-  let(:tools) { Magi::Archive::Mcp::Tools.new }
+  let(:tools) { Hyperon::Wiki::Mcp::Tools.new }
 
   before do
     skip "Integration tests disabled" unless ENV["INTEGRATION_TEST"]
@@ -28,9 +28,9 @@ RSpec.describe "Pointer and Search Card Handling", :integration do
 
       pointer_card_name = search_result["cards"].first["name"]
 
-      # Use the get_card tool from lib/magi/archive/mcp/server/tools/get_card.rb
+      # Use the get_card tool from lib/hyperon/wiki/mcp/server/tools/get_card.rb
       # This returns an MCP::Tool::Response
-      response = Magi::Archive::Mcp::Server::Tools::GetCard.call(
+      response = Hyperon::Wiki::Mcp::Server::Tools::GetCard.call(
         name: pointer_card_name,
         with_children: false,
         server_context: { magi_tools: tools }
@@ -54,7 +54,7 @@ RSpec.describe "Pointer and Search Card Handling", :integration do
 
       pointer_card_name = search_result["cards"].first["name"]
 
-      response = Magi::Archive::Mcp::Server::Tools::GetCard.call(
+      response = Hyperon::Wiki::Mcp::Server::Tools::GetCard.call(
         name: pointer_card_name,
         with_children: false,
         server_context: { magi_tools: tools }
@@ -76,7 +76,7 @@ RSpec.describe "Pointer and Search Card Handling", :integration do
 
       pointer_card_name = search_result["cards"].first["name"]
 
-      response = Magi::Archive::Mcp::Server::Tools::GetCard.call(
+      response = Hyperon::Wiki::Mcp::Server::Tools::GetCard.call(
         name: pointer_card_name,
         with_children: true,
         server_context: { magi_tools: tools }
@@ -106,7 +106,7 @@ RSpec.describe "Pointer and Search Card Handling", :integration do
 
       search_card_name = search_result["cards"].first["name"]
 
-      response = Magi::Archive::Mcp::Server::Tools::GetCard.call(
+      response = Hyperon::Wiki::Mcp::Server::Tools::GetCard.call(
         name: search_card_name,
         with_children: false,
         server_context: { magi_tools: tools }
@@ -129,7 +129,7 @@ RSpec.describe "Pointer and Search Card Handling", :integration do
 
       search_card_name = search_result["cards"].first["name"]
 
-      response = Magi::Archive::Mcp::Server::Tools::GetCard.call(
+      response = Hyperon::Wiki::Mcp::Server::Tools::GetCard.call(
         name: search_card_name,
         with_children: false,
         server_context: { magi_tools: tools }
@@ -154,7 +154,7 @@ RSpec.describe "Pointer and Search Card Handling", :integration do
 
       regular_card_name = search_result["cards"].first["name"]
 
-      response = Magi::Archive::Mcp::Server::Tools::GetCard.call(
+      response = Hyperon::Wiki::Mcp::Server::Tools::GetCard.call(
         name: regular_card_name,
         with_children: false,
         server_context: { magi_tools: tools }
@@ -175,21 +175,21 @@ RSpec.describe "Pointer and Search Card Handling", :integration do
   describe "Tool description clarity" do
     it "describes Pointer card behavior in tool description" do
       # The GetCard tool class should have an updated description
-      description = Magi::Archive::Mcp::Server::Tools::GetCard.description
+      description = Hyperon::Wiki::Mcp::Server::Tools::GetCard.description
 
       expect(description).to include("Pointer cards contain references")
       expect(description).to include("list_children")
     end
 
     it "describes Search card behavior in tool description" do
-      description = Magi::Archive::Mcp::Server::Tools::GetCard.description
+      description = Hyperon::Wiki::Mcp::Server::Tools::GetCard.description
 
       expect(description).to include("Search cards contain dynamic queries")
       expect(description).to include("content shows query, not results")
     end
 
     it "mentions underscore usage for exact name matches" do
-      description = Magi::Archive::Mcp::Server::Tools::GetCard.description
+      description = Hyperon::Wiki::Mcp::Server::Tools::GetCard.description
 
       expect(description).to include("underscores for exact name matches")
     end

@@ -16,7 +16,7 @@ app = lambda do |env|
   when "/health"
     [200, { "Content-Type" => "application/json" }, [{ status: "healthy", version: "0.1.0-RACK", timestamp: Time.now.iso8601 }.to_json]]
   when "/"
-    [200, { "Content-Type" => "application/json" }, [{ name: "magi-archive-mcp-rack-test", message: "Plain Rack app - no Sinatra" }.to_json]]
+    [200, { "Content-Type" => "application/json" }, [{ name: "hyperon-wiki-mcp-rack-test", message: "Plain Rack app - no Sinatra" }.to_json]]
   else
     [404, { "Content-Type" => "text/plain" }, ["Not Found"]]
   end

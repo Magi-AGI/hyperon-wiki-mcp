@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-require "magi/archive/mcp"
+require "hyperon/wiki/mcp"
 require "webmock/rspec"
 
 # Configure WebMock

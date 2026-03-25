@@ -4,22 +4,22 @@
 # Quick test to verify Client namespace resolution works
 
 require "bundler/setup"
-require_relative "lib/magi/archive/mcp"
-require_relative "lib/magi/archive/mcp/server/tools/create_card"
+require_relative "lib/hyperon/wiki/mcp"
+require_relative "lib/hyperon/wiki/mcp/server/tools/create_card"
 
 puts "Testing Client namespace resolution..."
 puts ""
 
 # Check if Client class is loaded
-if defined?(Magi::Archive::Mcp::Client)
-  puts "✓ Magi::Archive::Mcp::Client is defined"
+if defined?(Hyperon::Wiki::Mcp::Client)
+  puts "✓ Hyperon::Wiki::Mcp::Client is defined"
 else
-  puts "✗ Magi::Archive::Mcp::Client is NOT defined"
+  puts "✗ Hyperon::Wiki::Mcp::Client is NOT defined"
   exit 1
 end
 
 # Check if the alias works in the tool class
-tool_class = Magi::Archive::Mcp::Server::Tools::CreateCard
+tool_class = Hyperon::Wiki::Mcp::Server::Tools::CreateCard
 
 if tool_class.const_defined?(:Client)
   puts "✓ Client constant is defined in CreateCard class"

@@ -16,7 +16,7 @@ RSpec.describe "Admin Backup Integration", :integration do
   end
 
   describe "Admin backup operations" do
-    let(:tools) { Magi::Archive::Mcp::Tools.new }
+    let(:tools) { Hyperon::Wiki::Mcp::Tools.new }
 
     before do
       # Ensure we're using admin role for these tests
@@ -115,7 +115,7 @@ RSpec.describe "Admin Backup Integration", :integration do
       it "raises error when deleting non-existent backup" do
         expect {
           tools.delete_database_backup("nonexistent_backup_12345.sql")
-        }.to raise_error(Magi::Archive::Mcp::Client::NotFoundError)
+        }.to raise_error(Hyperon::Wiki::Mcp::Client::NotFoundError)
       end
     end
   end
@@ -130,21 +130,21 @@ RSpec.describe "Admin Backup Integration", :integration do
     it "denies backup operations to user role" do
       # Set role to user
       ENV["MCP_ROLE"] = "user"
-      user_tools = Magi::Archive::Mcp::Tools.new
+      user_tools = Hyperon::Wiki::Mcp::Tools.new
 
       expect {
         user_tools.list_database_backups
-      }.to raise_error(Magi::Archive::Mcp::Auth::AuthenticationError)
+      }.to raise_error(Hyperon::Wiki::Mcp::Auth::AuthenticationError)
     end
 
     it "denies backup operations to gm role" do
       # Set role to gm
       ENV["MCP_ROLE"] = "gm"
-      gm_tools = Magi::Archive::Mcp::Tools.new
+      gm_tools = Hyperon::Wiki::Mcp::Tools.new
 
       expect {
         gm_tools.list_database_backups
-      }.to raise_error(Magi::Archive::Mcp::Auth::AuthenticationError)
+      }.to raise_error(Hyperon::Wiki::Mcp::Auth::AuthenticationError)
     end
   end
 end

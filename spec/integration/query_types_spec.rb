@@ -7,7 +7,7 @@ RSpec.describe "Query Card Types", :integration do
   it "lists available card types on production server" do
     skip "Integration tests disabled" unless ENV["INTEGRATION_TEST"]
 
-    client = Magi::Archive::Mcp::Client.new
+    client = Hyperon::Wiki::Mcp::Client.new
 
     # Query for Cardtype cards
     result = client.get("/cards", type: "Cardtype", limit: 100)

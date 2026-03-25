@@ -16,7 +16,7 @@ require_relative "../support/integration_helpers"
 #
 # Run with: INTEGRATION_TEST=true bundle exec rspec spec/integration/hierarchy_search_spec.rb
 RSpec.describe "Hierarchy Search", :integration do
-  let(:tools) { Magi::Archive::Mcp::Tools.new }
+  let(:tools) { Hyperon::Wiki::Mcp::Tools.new }
   let(:test_prefix) { "HierarchyTest#{Time.now.to_i}" }
 
   before do

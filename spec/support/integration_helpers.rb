@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-# Integration test helpers for magi-archive-mcp
+# Integration test helpers for hyperon-wiki-mcp
 
 module IntegrationHelpers
   # Set up environment for integration tests
@@ -50,7 +50,7 @@ module IntegrationHelpers
     end
 
     # Create and return client (will use either MCP_API_KEY or MCP_USERNAME/MCP_PASSWORD)
-    Magi::Archive::Mcp::Client.new
+    Hyperon::Wiki::Mcp::Client.new
   end
 
   # Wait for server to be ready
@@ -69,7 +69,7 @@ module IntegrationHelpers
     loop do
       begin
         # Try to create a client and make a simple API call
-        client = Magi::Archive::Mcp::Client.new
+        client = Hyperon::Wiki::Mcp::Client.new
         client.get_card("Home")
         return true
       rescue StandardError => e

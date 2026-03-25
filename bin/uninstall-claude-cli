@@ -5,7 +5,7 @@
 
 class ClaudeCliUninstaller
   def run
-    puts "🗑️  Magi Archive MCP Server - Claude Code CLI Uninstaller"
+    puts "🗑️  Hyperon Wiki MCP Server - Claude Code CLI Uninstaller"
     puts ""
 
     # Check if claude command exists
@@ -15,17 +15,17 @@ class ClaudeCliUninstaller
       exit 1
     end
 
-    # Check if magi-archive is installed in any scope
+    # Check if hyperon-wiki is installed in any scope
     puts "🔍 Checking for installed MCP servers..."
     output = `claude mcp list 2>&1`
 
-    unless output.include?("magi-archive")
-      puts "✅ Magi Archive server not found - nothing to uninstall"
+    unless output.include?("hyperon-wiki")
+      puts "✅ Hyperon Wiki server not found - nothing to uninstall"
       exit 0
     end
 
     puts ""
-    puts "Found Magi Archive server in Claude Code CLI configuration"
+    puts "Found Hyperon Wiki server in Claude Code CLI configuration"
     print "Remove from all scopes (user, local, project)? (y/N): "
     response = gets.chomp.downcase
 
@@ -36,14 +36,14 @@ class ClaudeCliUninstaller
 
     # Remove from all scopes
     puts ""
-    puts "🗑️  Removing Magi Archive server from all scopes..."
+    puts "🗑️  Removing Hyperon Wiki server from all scopes..."
 
     scopes = ["user", "local", "project"]
     removed_any = false
 
     scopes.each do |scope|
       print "  Checking #{scope} scope... "
-      if system("claude mcp remove --scope #{scope} magi-archive > /dev/null 2>&1")
+      if system("claude mcp remove --scope #{scope} hyperon-wiki > /dev/null 2>&1")
         puts "✓ removed"
         removed_any = true
       else
@@ -53,7 +53,7 @@ class ClaudeCliUninstaller
 
     puts ""
     if removed_any
-      puts "✅ Magi Archive server configuration removed"
+      puts "✅ Hyperon Wiki server configuration removed"
       puts ""
       puts "Verify removal:"
       puts "  claude mcp list"

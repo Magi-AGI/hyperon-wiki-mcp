@@ -13,7 +13,7 @@ require_relative "../support/integration_helpers"
 #
 # Run with: INTEGRATION_TEST=true bundle exec rspec spec/integration/auto_link_spec.rb
 RSpec.describe "Auto Link Operations", :integration do
-  let(:tools) { Magi::Archive::Mcp::Tools.new }
+  let(:tools) { Hyperon::Wiki::Mcp::Tools.new }
   let(:test_prefix) { "AutoLinkTest#{Time.now.to_i}" }
 
   before do

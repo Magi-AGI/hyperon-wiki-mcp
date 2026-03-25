@@ -2,7 +2,7 @@
 
 source "https://rubygems.org"
 
-# Specify your gem's dependencies in magi-archive-mcp.gemspec
+# Specify your gem's dependencies in hyperon-wiki-mcp.gemspec
 gemspec
 
 # gem "irb"  # Temporarily disabled - native extension issues on Windows

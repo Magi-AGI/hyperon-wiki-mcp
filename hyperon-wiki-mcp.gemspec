@@ -1,10 +1,10 @@
 # frozen_string_literal: true
 
-require_relative "lib/magi/archive/mcp/version"
+require_relative "lib/hyperon/wiki/mcp/version"
 
 Gem::Specification.new do |spec|
   spec.name = "hyperon-wiki-mcp"
-  spec.version = Magi::Archive::Mcp::VERSION
+  spec.version = Hyperon::Wiki::Mcp::VERSION
   spec.authors = ["Nemquae"]
   spec.email = ["nemquae@gmail.com"]
 

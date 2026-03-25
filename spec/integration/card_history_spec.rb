@@ -18,7 +18,7 @@ require_relative "../support/integration_helpers"
 #
 # Run with: INTEGRATION_TEST=true bundle exec rspec spec/integration/card_history_spec.rb
 RSpec.describe "Card History and Restore Operations", :integration do
-  let(:tools) { Magi::Archive::Mcp::Tools.new }
+  let(:tools) { Hyperon::Wiki::Mcp::Tools.new }
   let(:test_prefix) { "HistoryTest#{Time.now.to_i}" }
 
   before do
@@ -130,7 +130,7 @@ RSpec.describe "Card History and Restore Operations", :integration do
       it "raises NotFoundError for non-existent card" do
         expect {
           tools.get_card_history("#{test_prefix}_NonExistent_#{rand(10000)}")
-        }.to raise_error(Magi::Archive::Mcp::Client::NotFoundError)
+        }.to raise_error(Hyperon::Wiki::Mcp::Client::NotFoundError)
       end
     end
   end
@@ -203,7 +203,7 @@ RSpec.describe "Card History and Restore Operations", :integration do
 
         expect {
           tools.get_revision(card_name, act_id: 999_999_999)
-        }.to raise_error(Magi::Archive::Mcp::Client::NotFoundError)
+        }.to raise_error(Hyperon::Wiki::Mcp::Client::NotFoundError)
       end
     end
   end
@@ -293,7 +293,7 @@ RSpec.describe "Card History and Restore Operations", :integration do
         # Verify card is gone
         expect {
           tools.get_card(card_name)
-        }.to raise_error(Magi::Archive::Mcp::Client::NotFoundError)
+        }.to raise_error(Hyperon::Wiki::Mcp::Client::NotFoundError)
 
         # Restore from trash
         result = tools.restore_card(card_name, from_trash: true)
@@ -332,7 +332,7 @@ RSpec.describe "Card History and Restore Operations", :integration do
         # Verify card is no longer accessible (in trash)
         expect {
           tools.get_card(card_name)
-        }.to raise_error(Magi::Archive::Mcp::Client::NotFoundError)
+        }.to raise_error(Hyperon::Wiki::Mcp::Client::NotFoundError)
 
         # Verify card appears in trash list
         trash_before = tools.list_trash
@@ -375,7 +375,7 @@ RSpec.describe "Card History and Restore Operations", :integration do
       it "raises NotFoundError for non-existent card in trash" do
         expect {
           tools.restore_card("#{test_prefix}_NotInTrash_#{rand(10000)}", from_trash: true)
-        }.to raise_error(Magi::Archive::Mcp::Client::NotFoundError)
+        }.to raise_error(Hyperon::Wiki::Mcp::Client::NotFoundError)
       end
     end
   end

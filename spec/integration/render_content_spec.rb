@@ -13,7 +13,7 @@ require_relative "../support/integration_helpers"
 #
 # Run with: INTEGRATION_TEST=true bundle exec rspec spec/integration/render_content_spec.rb
 RSpec.describe "Render Content Operations", :integration do
-  let(:tools) { Magi::Archive::Mcp::Tools.new }
+  let(:tools) { Hyperon::Wiki::Mcp::Tools.new }
 
   before do
     skip "Integration tests disabled (set INTEGRATION_TEST=true to enable)" unless ENV["INTEGRATION_TEST"]

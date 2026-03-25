@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 require "spec_helper"
-require "magi/archive/mcp/tools"
+require "hyperon/wiki/mcp/tools"
 
 # Contract tests using recorded response shapes from the Decko MCP server
 #
@@ -10,7 +10,7 @@ require "magi/archive/mcp/tools"
 #
 # Note: These use WebMock with recorded response shapes. For full integration
 # testing, run against a live Decko MCP server in a staging environment.
-RSpec.describe "Magi::Archive::Mcp Contract Tests", type: :integration do
+RSpec.describe "Hyperon::Wiki::Mcp Contract Tests", type: :integration do
   let(:base_url) { "https://test.example.com/api/mcp" }
   let(:valid_token) { "test-jwt-token" }
 
@@ -40,7 +40,7 @@ RSpec.describe "Magi::Archive::Mcp Contract Tests", type: :integration do
     ENV.delete("DECKO_API_BASE_URL")
   end
 
-  let(:tools) { Magi::Archive::Mcp::Tools.new }
+  let(:tools) { Hyperon::Wiki::Mcp::Tools.new }
 
   describe "GET /cards/:name" do
     it "handles real card response shape" do
@@ -51,7 +51,7 @@ RSpec.describe "Magi::Archive::Mcp Contract Tests", type: :integration do
           status: 200,
           body: {
             name: "Main Page",
-            content: "Welcome to the Magi Archive.",
+            content: "Welcome to the Hyperon Wiki.",
             type: "RichText",
             id: 1,
             url: "https://wiki.hyperon.dev/Main_Page",
@@ -65,7 +65,7 @@ RSpec.describe "Magi::Archive::Mcp Contract Tests", type: :integration do
 
       expect(card).to be_a(Hash)
       expect(card["name"]).to eq("Main Page")
-      expect(card["content"]).to eq("Welcome to the Magi Archive.")
+      expect(card["content"]).to eq("Welcome to the Hyperon Wiki.")
       expect(card["type"]).to eq("RichText")
       expect(card["id"]).to eq(1)
       expect(card["url"]).to be_a(String)
@@ -261,7 +261,7 @@ RSpec.describe "Magi::Archive::Mcp Contract Tests", type: :integration do
         )
 
       expect { tools.get_card("Nonexistent") }.to raise_error(
-        Magi::Archive::Mcp::Client::NotFoundError,
+        Hyperon::Wiki::Mcp::Client::NotFoundError,
         /Card 'Nonexistent' not found/
       )
     end
@@ -285,7 +285,7 @@ RSpec.describe "Magi::Archive::Mcp Contract Tests", type: :integration do
         )
 
       expect { tools.create_card("") }.to raise_error(
-        Magi::Archive::Mcp::Client::ValidationError
+        Hyperon::Wiki::Mcp::Client::ValidationError
       ) do |error|
         expect(error.details).to be_a(Hash)
         expect(error.details["name"]).to include("cannot be blank")

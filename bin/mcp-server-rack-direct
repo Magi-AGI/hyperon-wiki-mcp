@@ -12,11 +12,11 @@ Dotenv.load(File.expand_path('../.env', __dir__))
 
 require 'puma'
 require 'mcp'
-require_relative '../lib/magi/archive/mcp'
-require_relative '../lib/magi/archive/mcp/rack_app'
+require_relative '../lib/hyperon/wiki/mcp'
+require_relative '../lib/hyperon/wiki/mcp/rack_app'
 
 # Load all tool classes
-Dir[File.join(__dir__, '../lib/magi/archive/mcp/server/tools/**/*.rb')].sort.each { |f| require f }
+Dir[File.join(__dir__, '../lib/hyperon/wiki/mcp/server/tools/**/*.rb')].sort.each { |f| require f }
 
 # Get configuration from environment
 PORT = ENV.fetch("MCP_SERVER_PORT", "3002").to_i
@@ -24,7 +24,7 @@ HOST = ENV.fetch("MCP_SERVER_HOST", "127.0.0.1")
 working_directory = ENV["MAGI_WORKING_DIR"] || "/home/ubuntu"
 
 # Initialize tools
-magi_tools = Magi::Archive::Mcp::Tools.new
+magi_tools = Hyperon::Wiki::Mcp::Tools.new
 
 # Create server context
 server_context = {
@@ -34,85 +34,85 @@ server_context = {
 
 # Create MCP server
 mcp_server = ::MCP::Server.new(
-  name: "magi-archive",
-  version: Magi::Archive::Mcp::VERSION,
+  name: "hyperon-wiki",
+  version: Hyperon::Wiki::Mcp::VERSION,
   tools: [
     # ChatGPT connector-compatible tools (must be first for OpenAI compatibility)
-    Magi::Archive::Mcp::Server::Tools::Search,
-    Magi::Archive::Mcp::Server::Tools::Fetch,
-    Magi::Archive::Mcp::Server::Tools::GetSiteContext,
+    Hyperon::Wiki::Mcp::Server::Tools::Search,
+    Hyperon::Wiki::Mcp::Server::Tools::Fetch,
+    Hyperon::Wiki::Mcp::Server::Tools::GetSiteContext,
 
     # Core card operations
-    Magi::Archive::Mcp::Server::Tools::GetCard,
-    Magi::Archive::Mcp::Server::Tools::SearchCards,
-    Magi::Archive::Mcp::Server::Tools::CreateCard,
-    Magi::Archive::Mcp::Server::Tools::UpdateCard,
-    Magi::Archive::Mcp::Server::Tools::DeleteCard,
-    Magi::Archive::Mcp::Server::Tools::RenameCard,
-    Magi::Archive::Mcp::Server::Tools::ListChildren,
+    Hyperon::Wiki::Mcp::Server::Tools::GetCard,
+    Hyperon::Wiki::Mcp::Server::Tools::SearchCards,
+    Hyperon::Wiki::Mcp::Server::Tools::CreateCard,
+    Hyperon::Wiki::Mcp::Server::Tools::UpdateCard,
+    Hyperon::Wiki::Mcp::Server::Tools::DeleteCard,
+    Hyperon::Wiki::Mcp::Server::Tools::RenameCard,
+    Hyperon::Wiki::Mcp::Server::Tools::ListChildren,
 
     # Tag operations
-    Magi::Archive::Mcp::Server::Tools::GetTags,
-    Magi::Archive::Mcp::Server::Tools::SearchByTags,
-    Magi::Archive::Mcp::Server::Tools::SuggestTags,
+    Hyperon::Wiki::Mcp::Server::Tools::GetTags,
+    Hyperon::Wiki::Mcp::Server::Tools::SearchByTags,
+    Hyperon::Wiki::Mcp::Server::Tools::SuggestTags,
 
     # Relationships
-    Magi::Archive::Mcp::Server::Tools::GetRelationships,
+    Hyperon::Wiki::Mcp::Server::Tools::GetRelationships,
 
     # Types and rendering
-    Magi::Archive::Mcp::Server::Tools::GetTypes,
-    Magi::Archive::Mcp::Server::Tools::RenderContent,
+    Hyperon::Wiki::Mcp::Server::Tools::GetTypes,
+    Hyperon::Wiki::Mcp::Server::Tools::RenderContent,
 
     # Admin operations
-    Magi::Archive::Mcp::Server::Tools::AdminBackup,
+    Hyperon::Wiki::Mcp::Server::Tools::AdminBackup,
 
     # Card history and restore
-    Magi::Archive::Mcp::Server::Tools::GetCardHistory,
-    Magi::Archive::Mcp::Server::Tools::GetRevision,
-    Magi::Archive::Mcp::Server::Tools::RestoreCard,
-    Magi::Archive::Mcp::Server::Tools::ListTrash,
+    Hyperon::Wiki::Mcp::Server::Tools::GetCardHistory,
+    Hyperon::Wiki::Mcp::Server::Tools::GetRevision,
+    Hyperon::Wiki::Mcp::Server::Tools::RestoreCard,
+    Hyperon::Wiki::Mcp::Server::Tools::ListTrash,
 
     # Weekly summaries
-    Magi::Archive::Mcp::Server::Tools::CreateWeeklySummary,
+    Hyperon::Wiki::Mcp::Server::Tools::CreateWeeklySummary,
 
     # Health check
-    Magi::Archive::Mcp::Server::Tools::HealthCheck,
+    Hyperon::Wiki::Mcp::Server::Tools::HealthCheck,
 
     # Phase 3: Advanced operations
-    Magi::Archive::Mcp::Server::Tools::BatchCards,
-    Magi::Archive::Mcp::Server::Tools::RunQuery,
-    Magi::Archive::Mcp::Server::Tools::SpoilerScan,
+    Hyperon::Wiki::Mcp::Server::Tools::BatchCards,
+    Hyperon::Wiki::Mcp::Server::Tools::RunQuery,
+    Hyperon::Wiki::Mcp::Server::Tools::SpoilerScan,
 
     # Auto-linking
-    Magi::Archive::Mcp::Server::Tools::AutoLink
+    Hyperon::Wiki::Mcp::Server::Tools::AutoLink
   ],
   server_context: server_context
 )
 
 # Set MCP server instance on the app class
-Magi::Archive::Mcp::RackApp.mcp_server_instance = mcp_server
+Hyperon::Wiki::Mcp::RackApp.mcp_server_instance = mcp_server
 
 # Initialize OAuth components
 begin
-  require_relative '../lib/magi/archive/mcp/oauth/token_issuer'
-  require_relative '../lib/magi/archive/mcp/oauth/credential_store'
-  require_relative '../lib/magi/archive/mcp/oauth/client_cards'
-  require_relative '../lib/magi/archive/mcp/oauth/rate_limiter'
-  require_relative '../lib/magi/archive/mcp/oauth/pkce_verifier'
-  require_relative '../lib/magi/archive/mcp/oauth/login_page'
+  require_relative '../lib/hyperon/wiki/mcp/oauth/token_issuer'
+  require_relative '../lib/hyperon/wiki/mcp/oauth/credential_store'
+  require_relative '../lib/hyperon/wiki/mcp/oauth/client_cards'
+  require_relative '../lib/hyperon/wiki/mcp/oauth/rate_limiter'
+  require_relative '../lib/hyperon/wiki/mcp/oauth/pkce_verifier'
+  require_relative '../lib/hyperon/wiki/mcp/oauth/login_page'
 
-  token_issuer = Magi::Archive::Mcp::OAuth::TokenIssuer.new
-  credential_store = Magi::Archive::Mcp::OAuth::CredentialStore.new
-  client_cards = Magi::Archive::Mcp::OAuth::ClientCards.new(
+  token_issuer = Hyperon::Wiki::Mcp::OAuth::TokenIssuer.new
+  credential_store = Hyperon::Wiki::Mcp::OAuth::CredentialStore.new
+  client_cards = Hyperon::Wiki::Mcp::OAuth::ClientCards.new(
     tools: magi_tools,
     encryption_key: token_issuer.encryption_key
   )
-  rate_limiter = Magi::Archive::Mcp::OAuth::RateLimiter.new
+  rate_limiter = Hyperon::Wiki::Mcp::OAuth::RateLimiter.new
 
-  Magi::Archive::Mcp::RackApp.token_issuer = token_issuer
-  Magi::Archive::Mcp::RackApp.credential_store = credential_store
-  Magi::Archive::Mcp::RackApp.client_cards = client_cards
-  Magi::Archive::Mcp::RackApp.rate_limiter = rate_limiter
+  Hyperon::Wiki::Mcp::RackApp.token_issuer = token_issuer
+  Hyperon::Wiki::Mcp::RackApp.credential_store = credential_store
+  Hyperon::Wiki::Mcp::RackApp.client_cards = client_cards
+  Hyperon::Wiki::Mcp::RackApp.rate_limiter = rate_limiter
 
   puts "OAuth 2.1 enabled (require_auth=#{ENV.fetch('OAUTH_REQUIRE_AUTH', 'false')})"
 rescue StandardError => e
@@ -120,13 +120,13 @@ rescue StandardError => e
 end
 
 # Create Rack app instance with security middleware
-app = Magi::Archive::Mcp::RackApp.new
-app_with_security = Magi::Archive::Mcp::HostAuthorization.new(app)
+app = Hyperon::Wiki::Mcp::RackApp.new
+app_with_security = Hyperon::Wiki::Mcp::HostAuthorization.new(app)
 
 # Run Puma directly with pure Rack app
 Puma::Server.new(app_with_security).tap do |server|
   server.add_tcp_listener HOST, PORT
-  puts "Magi Archive MCP Server v#{Magi::Archive::Mcp::VERSION}"
+  puts "Hyperon Wiki MCP Server v#{Hyperon::Wiki::Mcp::VERSION}"
   puts "Pure Rack Mode (No Sinatra, No Rackup, No Middleware)"
   puts "Listening on http://#{HOST}:#{PORT}"
   puts "Working directory: #{working_directory}"

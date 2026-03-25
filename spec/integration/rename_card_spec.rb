@@ -12,7 +12,7 @@ require_relative "../support/integration_helpers"
 #
 # Run with: INTEGRATION_TEST=true bundle exec rspec spec/integration/rename_card_spec.rb
 RSpec.describe "Rename Card Operations", :integration do
-  let(:tools) { Magi::Archive::Mcp::Tools.new }
+  let(:tools) { Hyperon::Wiki::Mcp::Tools.new }
   let(:test_prefix) { "RenameTest#{Time.now.to_i}" }
 
   before do
@@ -47,7 +47,7 @@ RSpec.describe "Rename Card Operations", :integration do
       @created_cards = [new_name]
 
       # Verify old name no longer exists
-      expect { tools.get_card(original_name) }.to raise_error(Magi::Archive::Mcp::Client::NotFoundError)
+      expect { tools.get_card(original_name) }.to raise_error(Hyperon::Wiki::Mcp::Client::NotFoundError)
 
       # Verify new name exists with correct content
       renamed_card = tools.get_card(new_name)
@@ -150,7 +150,7 @@ RSpec.describe "Rename Card Operations", :integration do
     it "returns error for non-existent card" do
       expect {
         tools.rename_card("#{test_prefix}_NonExistent_#{rand(10000)}", "NewName")
-      }.to raise_error(Magi::Archive::Mcp::Client::NotFoundError)
+      }.to raise_error(Hyperon::Wiki::Mcp::Client::NotFoundError)
     end
 
     it "handles renaming to existing card name" do
@@ -166,7 +166,7 @@ RSpec.describe "Rename Card Operations", :integration do
       # Try to rename to existing name - should fail
       expect {
         tools.rename_card(name1, name2)
-      }.to raise_error(Magi::Archive::Mcp::Client::APIError)
+      }.to raise_error(Hyperon::Wiki::Mcp::Client::APIError)
     end
   end
 

@@ -4,7 +4,7 @@ require "spec_helper"
 require_relative "../support/integration_helpers"
 
 # Load MCP server tools
-Dir[File.join(__dir__, '../../lib/magi/archive/mcp/server/tools/**/*.rb')].sort.each { |f| require f }
+Dir[File.join(__dir__, '../../lib/hyperon/wiki/mcp/server/tools/**/*.rb')].sort.each { |f| require f }
 
 RSpec.describe "Session Improvements", :integration do
   # Integration tests for features added in recent session:
@@ -15,7 +15,7 @@ RSpec.describe "Session Improvements", :integration do
   #
   # Run with: INTEGRATION_TEST=true rspec spec/integration/session_improvements_spec.rb
 
-  let(:tools) { Magi::Archive::Mcp::Tools.new }
+  let(:tools) { Hyperon::Wiki::Mcp::Tools.new }
 
   before do
     skip "Integration tests disabled" unless ENV["INTEGRATION_TEST"]
@@ -38,7 +38,7 @@ RSpec.describe "Session Improvements", :integration do
         # Check if card is marked as virtual
         if full_card["virtual_card"] == true
           # Use the GetCard MCP tool to verify warning is shown
-          response = Magi::Archive::Mcp::Server::Tools::GetCard.call(
+          response = Hyperon::Wiki::Mcp::Server::Tools::GetCard.call(
             name: card["name"],
             with_children: false,
             server_context: { magi_tools: tools }
@@ -83,7 +83,7 @@ RSpec.describe "Session Improvements", :integration do
 
         if full_card["virtual_card"] == true
           # Verify the explanation mentions compound cards
-          response = Magi::Archive::Mcp::Server::Tools::GetCard.call(
+          response = Hyperon::Wiki::Mcp::Server::Tools::GetCard.call(
             name: card["name"],
             server_context: { magi_tools: tools }
           )
@@ -221,7 +221,7 @@ RSpec.describe "Session Improvements", :integration do
 
   describe "GetSiteContext MCP tool" do
     it "returns formatted site context" do
-      response = Magi::Archive::Mcp::Server::Tools::GetSiteContext.call(
+      response = Hyperon::Wiki::Mcp::Server::Tools::GetSiteContext.call(
         server_context: { magi_tools: tools }
       )
 
@@ -232,7 +232,7 @@ RSpec.describe "Session Improvements", :integration do
       text = response.content.first[:text]
 
       # Verify markdown formatting
-      expect(text).to include("# Magi Archive - Site Context")
+      expect(text).to include("# Hyperon Wiki - Site Context")
       expect(text).to include("## Wiki Hierarchy")
       expect(text).to include("## Content Guidelines")
       expect(text).to include("## Common Naming Patterns")
@@ -240,7 +240,7 @@ RSpec.describe "Session Improvements", :integration do
     end
 
     it "includes all major sections in formatted output" do
-      response = Magi::Archive::Mcp::Server::Tools::GetSiteContext.call(
+      response = Hyperon::Wiki::Mcp::Server::Tools::GetSiteContext.call(
         server_context: { magi_tools: tools }
       )
 
@@ -261,7 +261,7 @@ RSpec.describe "Session Improvements", :integration do
     end
 
     it "formats Butterfly Galaxii game details correctly" do
-      response = Magi::Archive::Mcp::Server::Tools::GetSiteContext.call(
+      response = Hyperon::Wiki::Mcp::Server::Tools::GetSiteContext.call(
         server_context: { magi_tools: tools }
       )
 
@@ -274,7 +274,7 @@ RSpec.describe "Session Improvements", :integration do
     end
 
     it "includes deleted card restoration guidance" do
-      response = Magi::Archive::Mcp::Server::Tools::GetSiteContext.call(
+      response = Hyperon::Wiki::Mcp::Server::Tools::GetSiteContext.call(
         server_context: { magi_tools: tools }
       )
 

@@ -60,7 +60,7 @@ RSpec.describe "MCP HTTP Server", :integration do
       expect(response.content_type.mime_type).to eq("application/json")
 
       body = JSON.parse(response.body.to_s)
-      expect(body["name"]).to eq("magi-archive-mcp")
+      expect(body["name"]).to eq("hyperon-wiki-mcp")
       expect(body["protocol"]).to eq("mcp")
       expect(body).to have_key("version")
       expect(body).to have_key("endpoints")
@@ -464,7 +464,7 @@ RSpec.describe "MCP HTTP Server", :integration do
 
       expect(response.status).to eq(200)
       expect(response.content_type.mime_type).to eq("text/html")
-      expect(response.body.to_s).to include("Magi Archive")
+      expect(response.body.to_s).to include("Hyperon Wiki")
       expect(response.body.to_s).to include("Sign in")
     end
 

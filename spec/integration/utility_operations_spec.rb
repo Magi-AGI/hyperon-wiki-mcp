@@ -14,7 +14,7 @@ RSpec.describe "Utility Operations Integration", :integration do
   end
 
   describe "Pagination utilities" do
-    let(:tools) { Magi::Archive::Mcp::Tools.new }
+    let(:tools) { Hyperon::Wiki::Mcp::Tools.new }
 
     describe "fetch_all_cards" do
       it "retrieves all cards with automatic pagination" do
@@ -126,7 +126,7 @@ RSpec.describe "Utility Operations Integration", :integration do
   end
 
   describe "Card name encoding" do
-    let(:tools) { Magi::Archive::Mcp::Tools.new }
+    let(:tools) { Hyperon::Wiki::Mcp::Tools.new }
 
     describe "encode_card_name" do
       it "encodes special characters for URLs" do
@@ -163,7 +163,7 @@ RSpec.describe "Utility Operations Integration", :integration do
   end
 
   describe "Content snippet rendering" do
-    let(:tools) { Magi::Archive::Mcp::Tools.new }
+    let(:tools) { Hyperon::Wiki::Mcp::Tools.new }
 
     describe "render_snippet" do
       it "truncates long content to specified length" do
@@ -207,7 +207,7 @@ RSpec.describe "Utility Operations Integration", :integration do
   end
 
   describe "Edge cases and error handling" do
-    let(:tools) { Magi::Archive::Mcp::Tools.new }
+    let(:tools) { Hyperon::Wiki::Mcp::Tools.new }
 
     it "handles pagination with no results" do
       cards = []

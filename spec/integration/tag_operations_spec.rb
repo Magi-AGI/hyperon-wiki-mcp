@@ -14,7 +14,7 @@ RSpec.describe "Tag Operations Integration", :integration do
   end
 
   describe "Tag discovery and search" do
-    let(:tools) { Magi::Archive::Mcp::Tools.new }
+    let(:tools) { Hyperon::Wiki::Mcp::Tools.new }
     let(:test_card_name) { "TagTestCard#{Time.now.to_i}" }
 
     after do

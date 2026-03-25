@@ -13,9 +13,9 @@ require "json"
 require "securerandom"
 require "io/console"
 
-require_relative "../lib/magi/archive/mcp"
-require_relative "../lib/magi/archive/mcp/oauth/token_issuer"
-require_relative "../lib/magi/archive/mcp/oauth/client_cards"
+require_relative "../lib/hyperon/wiki/mcp"
+require_relative "../lib/hyperon/wiki/mcp/oauth/token_issuer"
+require_relative "../lib/hyperon/wiki/mcp/oauth/client_cards"
 
 class OAuthInstaller
   PLATFORMS = {
@@ -118,8 +118,8 @@ class OAuthInstaller
     ENV["MCP_PASSWORD"] = password
     ENV["DECKO_API_BASE_URL"] ||= "https://wiki.hyperon.dev/api/mcp"
 
-    config = Magi::Archive::Mcp::Config.new
-    auth = Magi::Archive::Mcp::Auth.new(config)
+    config = Hyperon::Wiki::Mcp::Config.new
+    auth = Hyperon::Wiki::Mcp::Auth.new(config)
 
     # Authenticate to verify credentials and discover role
     jwt_token = auth.token
@@ -137,13 +137,13 @@ class OAuthInstaller
 
   def create_oauth_client(client_id, client_secret, username, password, role, platform_name)
     # Create a Tools instance with the authenticated user
-    tools = Magi::Archive::Mcp::Tools.new
+    tools = Hyperon::Wiki::Mcp::Tools.new
 
     # Create TokenIssuer to get encryption key
-    token_issuer = Magi::Archive::Mcp::OAuth::TokenIssuer.new
+    token_issuer = Hyperon::Wiki::Mcp::OAuth::TokenIssuer.new
 
     # Create client cards manager
-    client_cards = Magi::Archive::Mcp::OAuth::ClientCards.new(
+    client_cards = Hyperon::Wiki::Mcp::OAuth::ClientCards.new(
       tools: tools,
       encryption_key: token_issuer.encryption_key
     )
@@ -219,9 +219,9 @@ class OAuthInstaller
     puts "Your existing OAuth clients:"
     puts "-" * 40
 
-    tools = Magi::Archive::Mcp::Tools.new
-    token_issuer = Magi::Archive::Mcp::OAuth::TokenIssuer.new
-    client_cards = Magi::Archive::Mcp::OAuth::ClientCards.new(
+    tools = Hyperon::Wiki::Mcp::Tools.new
+    token_issuer = Hyperon::Wiki::Mcp::OAuth::TokenIssuer.new
+    client_cards = Hyperon::Wiki::Mcp::OAuth::ClientCards.new(
       tools: tools,
       encryption_key: token_issuer.encryption_key
     )

@@ -36,7 +36,7 @@ function compareVersions(version1, version2) {
   return 0;
 }
 
-console.log('🔍 Checking Magi Archive MCP Server prerequisites...\n');
+console.log('🔍 Checking Hyperon Wiki MCP Server prerequisites...\n');
 
 // Check Ruby
 if (!checkCommand('ruby --version', 'Ruby')) {
@@ -72,7 +72,7 @@ try {
   process.exit(1);
 }
 
-console.log('\n✅ Magi Archive MCP Server is ready!');
+console.log('\n✅ Hyperon Wiki MCP Server is ready!');
 console.log('\n📝 Configuration required:');
 console.log('   Set environment variables:');
 console.log('   - MCP_USERNAME and MCP_PASSWORD (recommended)');

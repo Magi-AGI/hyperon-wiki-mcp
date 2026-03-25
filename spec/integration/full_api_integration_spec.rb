@@ -21,7 +21,7 @@ RSpec.describe "Full API Integration", :integration do
 
   describe "Authentication flow" do
     it "successfully authenticates and returns JWT" do
-      tools = Magi::Archive::Mcp::Tools.new
+      tools = Hyperon::Wiki::Mcp::Tools.new
 
       # Auth should work without errors
       expect { tools.client.send(:auth).token }.not_to raise_error
@@ -32,7 +32,7 @@ RSpec.describe "Full API Integration", :integration do
     end
 
     it "caches token and reuses it" do
-      tools = Magi::Archive::Mcp::Tools.new
+      tools = Hyperon::Wiki::Mcp::Tools.new
 
       first_token = tools.client.send(:auth).token
       second_token = tools.client.send(:auth).token
@@ -54,7 +54,7 @@ RSpec.describe "Full API Integration", :integration do
   end
 
   describe "Card operations" do
-    let(:tools) { Magi::Archive::Mcp::Tools.new }
+    let(:tools) { Hyperon::Wiki::Mcp::Tools.new }
     let(:test_card_name) { "IntegrationTest#{Time.now.to_i}" }
 
     after do
@@ -90,12 +90,12 @@ RSpec.describe "Full API Integration", :integration do
       # Verify deleted
       expect {
         tools.get_card(test_card_name)
-      }.to raise_error(Magi::Archive::Mcp::Client::NotFoundError)
+      }.to raise_error(Hyperon::Wiki::Mcp::Client::NotFoundError)
     end
   end
 
   describe "Batch operations" do
-    let(:tools) { Magi::Archive::Mcp::Tools.new }
+    let(:tools) { Hyperon::Wiki::Mcp::Tools.new }
     let(:batch_prefix) { "BatchTest#{Time.now.to_i}" }
 
     after do
@@ -148,12 +148,12 @@ RSpec.describe "Full API Integration", :integration do
       # Verify first card wasn't created (transactional rollback worked)
       expect {
         tools.get_card("#{batch_prefix}_good")
-      }.to raise_error(Magi::Archive::Mcp::Client::NotFoundError)
+      }.to raise_error(Hyperon::Wiki::Mcp::Client::NotFoundError)
     end
   end
 
   describe "List children" do
-    let(:tools) { Magi::Archive::Mcp::Tools.new }
+    let(:tools) { Hyperon::Wiki::Mcp::Tools.new }
 
     it "lists children of a parent card" do
       parent_name = "IntegrationTestParent#{Time.now.to_i}"
@@ -195,7 +195,7 @@ RSpec.describe "Full API Integration", :integration do
   end
 
   describe "Spoiler scan" do
-    let(:tools) { Magi::Archive::Mcp::Tools.new }
+    let(:tools) { Hyperon::Wiki::Mcp::Tools.new }
     let(:scan_prefix) { "ScanTest#{Time.now.to_i}" }
 
     before do
@@ -230,12 +230,12 @@ RSpec.describe "Full API Integration", :integration do
   end
 
   describe "Error handling" do
-    let(:tools) { Magi::Archive::Mcp::Tools.new }
+    let(:tools) { Hyperon::Wiki::Mcp::Tools.new }
 
     it "raises NotFoundError for non-existent card" do
       expect {
         tools.get_card("ThisCardDoesNotExist#{rand(10000)}")
-      }.to raise_error(Magi::Archive::Mcp::Client::NotFoundError)
+      }.to raise_error(Hyperon::Wiki::Mcp::Client::NotFoundError)
     end
 
     it "raises ValidationError for invalid card type" do
@@ -245,17 +245,17 @@ RSpec.describe "Full API Integration", :integration do
           type: "NonExistentType",
           content: "Test"
         )
-      }.to raise_error(Magi::Archive::Mcp::Client::APIError, /Type 'NonExistentType' not found/)
+      }.to raise_error(Hyperon::Wiki::Mcp::Client::APIError, /Type 'NonExistentType' not found/)
     end
 
     it "raises AuthenticationError when API key doesn't support requested role" do
       # Try to use a role not authorized for this API key
       ENV["MCP_ROLE"] = "user"
-      user_tools = Magi::Archive::Mcp::Tools.new
+      user_tools = Hyperon::Wiki::Mcp::Tools.new
 
       expect {
         user_tools.delete_card("SomeCard")
-      }.to raise_error(Magi::Archive::Mcp::Auth::AuthenticationError, /API key not authorized for role/)
+      }.to raise_error(Hyperon::Wiki::Mcp::Auth::AuthenticationError, /API key not authorized for role/)
     end
   end
 
@@ -264,14 +264,14 @@ RSpec.describe "Full API Integration", :integration do
     # Integration tests verify successful requests work correctly
     # Actual retry behavior would require a test server that returns 500s
     it "successfully handles normal requests", skip: "Retry logic tested in unit tests" do
-      tools = Magi::Archive::Mcp::Tools.new
+      tools = Hyperon::Wiki::Mcp::Tools.new
       # If we get here without errors, request handling works
       expect(tools.get_card("Test")).to be_a(Hash)
     end
   end
 
   describe "Production-like scenarios" do
-    let(:tools) { Magi::Archive::Mcp::Tools.new }
+    let(:tools) { Hyperon::Wiki::Mcp::Tools.new }
 
     it "handles compound card names correctly" do
       parent_name = "ParentCard#{Time.now.to_i}"
@@ -307,7 +307,7 @@ RSpec.describe "Full API Integration", :integration do
   end
 
   describe "Search operations" do
-    let(:tools) { Magi::Archive::Mcp::Tools.new }
+    let(:tools) { Hyperon::Wiki::Mcp::Tools.new }
     let(:search_prefix) { "SearchTest#{Time.now.to_i}" }
 
     before do
@@ -438,7 +438,7 @@ RSpec.describe "Full API Integration", :integration do
   end
 
   describe "Rendering operations" do
-    let(:tools) { Magi::Archive::Mcp::Tools.new }
+    let(:tools) { Hyperon::Wiki::Mcp::Tools.new }
 
     it "converts HTML to Markdown" do
       html_content = "<h1>Test Heading</h1><p>This is <strong>bold</strong> text.</p><ul><li>Item 1</li><li>Item 2</li></ul>"
@@ -483,7 +483,7 @@ RSpec.describe "Full API Integration", :integration do
   end
 
   describe "Type discovery" do
-    let(:tools) { Magi::Archive::Mcp::Tools.new }
+    let(:tools) { Hyperon::Wiki::Mcp::Tools.new }
 
     it "lists available card types" do
       result = tools.list_types(limit: 100)
@@ -517,7 +517,7 @@ RSpec.describe "Full API Integration", :integration do
     end
   end
   describe "Search operations with search_in parameter" do
-    let(:tools) { Magi::Archive::Mcp::Tools.new }
+    let(:tools) { Hyperon::Wiki::Mcp::Tools.new }
 
     it "searches with default search_in=both mode" do
       # Search for a common term that should be in both names and content

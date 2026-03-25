@@ -9,7 +9,7 @@ require_relative "../support/integration_helpers"
 # simple names and minimal content) are correctly filtered from search
 # and list_children results by default, and can be included when requested.
 RSpec.describe "Virtual Card Filtering", :integration do
-  let(:tools) { Magi::Archive::Mcp::Tools.new }
+  let(:tools) { Hyperon::Wiki::Mcp::Tools.new }
   let(:test_prefix) { "VirtualFilterTest#{Time.now.to_i}" }
 
   before do
