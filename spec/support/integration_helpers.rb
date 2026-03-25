@@ -32,13 +32,9 @@ module IntegrationHelpers
 
   # Clean up integration test environment
   def teardown_integration_environment
-    # Don't delete INTEGRATION_TEST as it's a flag for all tests
-    # Only clean up credentials and server config
-    ENV.delete("DECKO_API_BASE_URL")
-    ENV.delete("MCP_API_KEY")
-    ENV.delete("MCP_ROLE")
-    ENV.delete("MCP_USERNAME")
-    ENV.delete("MCP_PASSWORD")
+    # Don't delete env vars that are needed across tests.
+    # DECKO_API_BASE_URL, MCP_USERNAME, MCP_PASSWORD, etc. are set once
+    # and reused for every test in the suite.
   end
 
   # Get a configured client for integration tests
