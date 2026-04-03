@@ -124,8 +124,7 @@ module Hyperon
         #   # => { "status" => "healthy", "timestamp" => "2025-12-07T...", "checks" => {...} }
         def health_check
           url = config.url_for("/health")
-          http_client = configure_ssl(HTTP)
-          response = http_client.get(url)
+          response = HTTP.get(url, ssl_context: ssl_context)
 
           unless response.status.success?
             raise APIError.new("Health check failed", status: response.code)
@@ -147,8 +146,7 @@ module Hyperon
         #   # => { "status" => "ok", "timestamp" => "2025-12-07T..." }
         def ping
           url = config.url_for("/health/ping")
-          http_client = configure_ssl(HTTP)
-          response = http_client.get(url)
+          response = HTTP.get(url, ssl_context: ssl_context)
 
           unless response.status.success?
             raise APIError.new("Ping failed", status: response.code)
@@ -188,8 +186,7 @@ module Hyperon
           }
 
           http_client = HTTP.headers(headers)
-          http_client = configure_ssl(http_client)
-          response = http_client.get(url, params: params)
+          response = http_client.get(url, params: params, ssl_context: ssl_context)
 
           # Check for errors but return raw response
           case response.code
@@ -284,19 +281,18 @@ module Hyperon
           # Timeouts prevent hanging when Decko is slow, returning errors before
           # ChatGPT's ~15s timeout kills the connection (causing nginx 499s)
           http_client = HTTP.headers(headers).timeout(connect: 5, write: 5, read: 8)
-          http_client = configure_ssl(http_client)
 
           response = case method
                      when :get
-                       http_client.get(url, params: params)
+                       http_client.get(url, params: params, ssl_context: ssl_context)
                      when :post
-                       http_client.post(url, json: json)
+                       http_client.post(url, json: json, ssl_context: ssl_context)
                      when :patch
-                       http_client.patch(url, json: json)
+                       http_client.patch(url, json: json, ssl_context: ssl_context)
                      when :put
-                       http_client.put(url, json: json)
+                       http_client.put(url, json: json, ssl_context: ssl_context)
                      when :delete
-                       http_client.delete(url)
+                       http_client.delete(url, ssl_context: ssl_context)
                      else
                        raise ArgumentError, "Unsupported HTTP method: #{method}"
                      end
@@ -406,16 +402,14 @@ module Hyperon
           2**retry_count
         end
 
-        # Configure SSL settings for HTTP client
-        def configure_ssl(http_client)
-          if config.ssl_verify_mode == :none
-            # Disable SSL verification (not recommended for production)
-            require "openssl"
-            http_client.via(:ssl_context, OpenSSL::SSL::VERIFY_NONE)
-          else
-            # Use default strict verification
-            http_client
-          end
+        # Build SSL context for HTTP requests (nil = default verification)
+        def ssl_context
+          return nil unless config.ssl_verify_mode == :none
+
+          require "openssl"
+          ctx = OpenSSL::SSL::SSLContext.new
+          ctx.verify_mode = OpenSSL::SSL::VERIFY_NONE
+          ctx
         end
       end
     end

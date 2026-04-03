@@ -81,8 +81,7 @@ module Hyperon
 
           url = config.url_for("/.well-known/jwks.json")
 
-          http_client = configure_ssl(HTTP)
-          response = http_client.get(url)
+          response = HTTP.get(url, ssl_context: ssl_context)
 
           unless response.status.success?
             raise JWKSError,
@@ -174,11 +173,11 @@ module Hyperon
           url = config.url_for("/auth")
           payload = config.auth_payload
 
-          http_client = configure_ssl(HTTP)
-          response = http_client.post(
+          response = HTTP.post(
             url,
             json: payload,
-            headers: { "Content-Type" => "application/json" }
+            headers: { "Content-Type" => "application/json" },
+            ssl_context: ssl_context
           )
 
           unless response.status.success?
@@ -240,16 +239,14 @@ module Hyperon
           Base64.strict_decode64(str)
         end
 
-        # Configure SSL settings for HTTP client
-        def configure_ssl(http_client)
-          if config.ssl_verify_mode == :none
-            # Disable SSL verification (not recommended for production)
-            require "openssl"
-            http_client.via(:ssl_context, OpenSSL::SSL::VERIFY_NONE)
-          else
-            # Use default strict verification
-            http_client
-          end
+        # Build SSL context for HTTP requests (nil = default verification)
+        def ssl_context
+          return nil unless config.ssl_verify_mode == :none
+
+          require "openssl"
+          ctx = OpenSSL::SSL::SSLContext.new
+          ctx.verify_mode = OpenSSL::SSL::VERIFY_NONE
+          ctx
         end
       end
     end
