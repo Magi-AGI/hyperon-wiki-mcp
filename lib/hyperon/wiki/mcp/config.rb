@@ -1,6 +1,13 @@
 # frozen_string_literal: true
 
-require "dotenv/load"
+require "dotenv"
+
+# Load .env from the gem root, not the process CWD.
+# When MCP clients (Cursor, Claude Desktop, etc.) spawn the server,
+# the CWD is typically NOT the project directory, so dotenv/load
+# (which searches CWD) would silently fail to find the .env file.
+_gem_root = File.expand_path("../../../../..", __FILE__)
+Dotenv.load(File.join(_gem_root, ".env"))
 
 module Hyperon
   module Wiki
