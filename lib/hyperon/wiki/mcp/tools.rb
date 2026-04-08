@@ -1250,11 +1250,16 @@ module Hyperon
           # NOTE: Periods (.) MUST be encoded as %2E because Rails interprets
           # unencoded periods in URL paths as format separators (e.g., "Dr.Venn"
           # would be parsed as format: "Venn"). This breaks cards like "Dr. Smith".
-          name.chars.map do |char|
-            if char.match?(/[A-Za-z0-9\-_~+]/)
+          #
+          # Force UTF-8 encoding before percent-encoding bytes. On Windows,
+          # strings may arrive in IBM437/Windows-1252 which produces wrong
+          # byte sequences for non-ASCII chars (e.g., ö → %94 instead of %C3%B6).
+          utf8_name = name.encode("UTF-8")
+          utf8_name.chars.map do |char|
+            if char.ascii_only? && char.match?(/[A-Za-z0-9\-_~+]/)
               char
             else
-              format("%%%02X", char.ord)
+              char.bytes.map { |byte| format("%%%02X", byte) }.join
             end
           end.join
         end
