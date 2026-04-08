@@ -282,6 +282,99 @@ module Hyperon
           client.patch("/cards/#{encode_card_name(name)}", **payload)
         end
 
+        # Append content to a card
+        #
+        # Adds content to the end of the card's existing content.
+        # Works on any content format (HTML, markdown, wiki links, etc).
+        #
+        # @param name [String] the card name
+        # @param content [String] content to append
+        # @param separator [String] separator between existing and new content (default: "")
+        # @return [Hash] updated card data
+        def append_content(name, content:, separator: "")
+          client.patch("/cards/#{encode_card_name(name)}",
+                       patch: { mode: "append", content: content, separator: separator })
+        end
+
+        # Prepend content to a card
+        #
+        # Adds content to the beginning of the card's existing content.
+        # Works on any content format (HTML, markdown, wiki links, etc).
+        #
+        # @param name [String] the card name
+        # @param content [String] content to prepend
+        # @param separator [String] separator between new and existing content (default: "")
+        # @return [Hash] updated card data
+        def prepend_content(name, content:, separator: "")
+          client.patch("/cards/#{encode_card_name(name)}",
+                       patch: { mode: "prepend", content: content, separator: separator })
+        end
+
+        # Find and replace text in a card's content
+        #
+        # Performs a literal string find-and-replace on the card's raw stored content.
+        # Works on any content format (HTML, markdown, wiki links, etc).
+        #
+        # @param name [String] the card name
+        # @param find [String] the text to find (exact match, not regex)
+        # @param replace [String] the replacement text
+        # @param occurrence [String] which occurrences to replace: "first" (default), "last", "all"
+        # @return [Hash] updated card data
+        # @raise [Client::ValidationError] if text not found in card
+        def find_and_replace(name, find:, replace:, occurrence: "first")
+          client.patch("/cards/#{encode_card_name(name)}",
+                       patch: { mode: "find_replace", find: find, replace: replace, occurrence: occurrence })
+        end
+
+        # Search within a card's content
+        #
+        # Searches for text within a card's raw stored content and returns
+        # matching excerpts with surrounding context. Useful for finding
+        # specific content without fetching the entire card.
+        #
+        # @param name [String] the card name
+        # @param query [String] the text to search for (exact match)
+        # @param context_chars [Integer] characters of context around each match (default: 100)
+        # @return [Hash] with keys: card, query, match_count, content_length, matches
+        def find_in_card(name, query:, context_chars: 100)
+          client.get("/cards/#{encode_card_name(name)}/search_content",
+                     query: query, context_chars: context_chars)
+        end
+
+        # Get the heading outline of a card
+        #
+        # Returns the heading structure (HTML h1-h6 and Markdown #) without
+        # the full content. Useful for understanding card structure before
+        # deciding which section to read or update.
+        #
+        # @param name [String] the card name
+        # @return [Hash] with keys: card, type, content_length, headings
+        def get_card_outline(name)
+          client.get("/cards/#{encode_card_name(name)}/outline")
+        end
+
+        # Submit feedback from an AI agent
+        #
+        # Appends feedback to the MCP Agent Feedback log card on the wiki.
+        # Used by AI agents to report issues, suggest improvements, or
+        # log observations during their interactions.
+        #
+        # @param category [String] feedback category: "bug", "feature_request", "usability", "performance", "other"
+        # @param message [String] the feedback message
+        # @param tool_name [String, nil] which MCP tool prompted the feedback (optional)
+        # @return [Hash] updated card data
+        def submit_feedback(category:, message:, tool_name: nil)
+          timestamp = Time.now.utc.iso8601
+          entry = "\n<p><strong>[#{timestamp}]</strong> "
+          entry += "<em>(#{tool_name})</em> " if tool_name
+          entry += "<strong>[#{category}]</strong> #{message}</p>"
+
+          append_content("MCP Agent Feedback+log", content: entry, separator: "\n")
+        rescue Client::NotFoundError
+          # Create the feedback log card if it doesn't exist
+          create_card("MCP Agent Feedback+log", content: entry, type: "RichText")
+        end
+
         # Delete a card
         #
         # Permanently deletes a card. This operation cannot be undone.

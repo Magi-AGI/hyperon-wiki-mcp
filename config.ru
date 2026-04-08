@@ -70,7 +70,15 @@ mcp_server = ::MCP::Server.new(
     Hyperon::Wiki::Mcp::Server::Tools::SpoilerScan,
 
     # Auto-linking
-    Hyperon::Wiki::Mcp::Server::Tools::AutoLink
+    Hyperon::Wiki::Mcp::Server::Tools::AutoLink,
+
+    # Content editing tools
+    Hyperon::Wiki::Mcp::Server::Tools::AppendContent,
+    Hyperon::Wiki::Mcp::Server::Tools::PrependContent,
+    Hyperon::Wiki::Mcp::Server::Tools::FindAndReplace,
+    Hyperon::Wiki::Mcp::Server::Tools::FindInCard,
+    Hyperon::Wiki::Mcp::Server::Tools::GetCardOutline,
+    Hyperon::Wiki::Mcp::Server::Tools::SubmitFeedback
   ],
   server_context: server_context
 )

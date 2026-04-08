@@ -60,6 +60,14 @@ require_relative "../lib/hyperon/wiki/mcp/server/tools/spoiler_scan"
 # Auto-linking
 require_relative "../lib/hyperon/wiki/mcp/server/tools/auto_link"
 
+# Content editing tools
+require_relative "../lib/hyperon/wiki/mcp/server/tools/append_content"
+require_relative "../lib/hyperon/wiki/mcp/server/tools/prepend_content"
+require_relative "../lib/hyperon/wiki/mcp/server/tools/find_and_replace"
+require_relative "../lib/hyperon/wiki/mcp/server/tools/find_in_card"
+require_relative "../lib/hyperon/wiki/mcp/server/tools/get_card_outline"
+require_relative "../lib/hyperon/wiki/mcp/server/tools/submit_feedback"
+
 # Initialize the Hyperon Wiki tools
 # This creates an authenticated client using environment variables:
 # - MCP_USERNAME + MCP_PASSWORD (recommended)
@@ -134,7 +142,15 @@ server = ::MCP::Server.new(
     Hyperon::Wiki::Mcp::Server::Tools::SpoilerScan,
 
     # Auto-linking
-    Hyperon::Wiki::Mcp::Server::Tools::AutoLink
+    Hyperon::Wiki::Mcp::Server::Tools::AutoLink,
+
+    # Content editing tools
+    Hyperon::Wiki::Mcp::Server::Tools::AppendContent,
+    Hyperon::Wiki::Mcp::Server::Tools::PrependContent,
+    Hyperon::Wiki::Mcp::Server::Tools::FindAndReplace,
+    Hyperon::Wiki::Mcp::Server::Tools::FindInCard,
+    Hyperon::Wiki::Mcp::Server::Tools::GetCardOutline,
+    Hyperon::Wiki::Mcp::Server::Tools::SubmitFeedback
   ],
   server_context: server_context
 )
