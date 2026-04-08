@@ -12,7 +12,7 @@ module Hyperon
           class CreateCard < ::MCP::Tool
             # Alias Client for cleaner error handling
             Client = Hyperon::Wiki::Mcp::Client
-            description "Create a new card in the Hyperon Wiki. Best practices: (1) Tag AI-generated draft cards with 'ai_generated' on the card's +tags subcard so human editors can identify and review them. (2) After creating a card, check if the parent card or a sibling has a table of contents (TOC) and update it to include the new card. TOCs are typically on the parent card itself or a sibling like Parent+table-of-contents."
+            description "Create a new card in the Hyperon Wiki. IMPORTANT: Cards with substantive content written by AI MUST be created as draft card types (e.g., 'Draft Article', not 'Article' or 'Published'). Never create Published-type cards directly — those are converted from drafts after human review. Tag all AI-generated cards with 'ai_generated' on the +tags subcard. Never apply review tags like 'human_approved' — only humans do that. After creating, check if the parent or a sibling has a TOC and update it."
 
             annotations(
               read_only_hint: true,
