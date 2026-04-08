@@ -1175,6 +1175,8 @@ module Hyperon
       # @param since [Time, String, nil] specific start date (overrides days)
       # @param before [Time, String, nil] specific end date (default: now)
       # @param limit [Integer] maximum results per page (default: 100)
+      # @param max_cards [Integer] maximum total cards to fetch (default: 5000).
+      #   Safety cap to prevent unbounded memory growth.
       # @return [Array<Hash>] array of updated cards with metadata
       #
       # @example Get cards updated in last week
@@ -1186,21 +1188,20 @@ module Hyperon
       #     since: "2025-11-25",
       #     before: "2025-12-02"
       #   )
-      def get_recent_changes(days: 7, since: nil, before: nil, limit: 100)
+      def get_recent_changes(days: 7, since: nil, before: nil, limit: 100, max_cards: 5000)
         since_time = since ? parse_time(since) : (Time.now - (days * 24 * 60 * 60))
         before_time = before ? parse_time(before) : Time.now
 
         all_cards = []
         offset = 0
         loop_count = 0
-        max_loops = 100 # Safety limit to prevent infinite loops
+        max_loops = [max_cards / [limit, 1].max + 1, 100].min
 
         loop do
-          # Safety check: prevent infinite loop if server has pagination bug
           loop_count += 1
           if loop_count > max_loops
             warn "Pagination safety limit reached (#{max_loops} pages). " \
-                 "Possible server pagination bug. Returning #{all_cards.size} cards so far."
+                 "Returning #{all_cards.size} cards so far."
             break
           end
 
@@ -1215,6 +1216,13 @@ module Hyperon
           break if cards.empty?
 
           all_cards.concat(cards)
+
+          # Stop if we've collected enough cards
+          if all_cards.size >= max_cards
+            all_cards = all_cards.first(max_cards)
+            break
+          end
+
           offset = result["next_offset"]
           break unless offset
         end
@@ -1366,8 +1374,8 @@ module Hyperon
         # This matches the existing pattern used for previous summaries
         card_name = "#{parent}+Weekly Work Summary #{date_str} - #{username}"
 
-        # Fetch recent changes
-        card_changes = get_recent_changes(days: days)
+        # Fetch recent changes (capped at 500 to avoid memory bloat)
+        card_changes = get_recent_changes(days: days, max_cards: 500)
         repo_changes = scan_git_repos(base_path: base_path, days: days)
 
         # Format summary

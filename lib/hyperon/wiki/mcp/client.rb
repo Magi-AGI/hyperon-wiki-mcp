@@ -280,7 +280,7 @@ module Hyperon
           # Configure HTTP client with SSL settings and timeouts
           # Timeouts prevent hanging when Decko is slow, returning errors before
           # ChatGPT's ~15s timeout kills the connection (causing nginx 499s)
-          http_client = HTTP.headers(headers).timeout(connect: 5, write: 5, read: 8)
+          http_client = HTTP.headers(headers).timeout(connect: 5, write: 5, read: 30)
 
           response = case method
                      when :get
@@ -406,10 +406,12 @@ module Hyperon
         def ssl_context
           return nil unless config.ssl_verify_mode == :none
 
-          require "openssl"
-          ctx = OpenSSL::SSL::SSLContext.new
-          ctx.verify_mode = OpenSSL::SSL::VERIFY_NONE
-          ctx
+          @ssl_context ||= begin
+            require "openssl"
+            ctx = OpenSSL::SSL::SSLContext.new
+            ctx.verify_mode = OpenSSL::SSL::VERIFY_NONE
+            ctx
+          end
         end
       end
     end
