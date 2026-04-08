@@ -34,6 +34,8 @@ module Hyperon
               - Cards explicitly requested for deletion by the user
 
               If accidentally deleted, cards can be recovered via the wiki's History tab.
+
+              **Best practice:** After deleting a card, check if the parent card or a sibling card has a table of contents (TOC) and remove the deleted card from it. TOCs are typically on the parent card itself or a sibling like Parent+table-of-contents.
             DESC
 
             description DESCRIPTION
