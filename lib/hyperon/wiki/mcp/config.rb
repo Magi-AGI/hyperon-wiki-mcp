@@ -6,8 +6,13 @@ require "dotenv"
 # When MCP clients (Cursor, Claude Desktop, etc.) spawn the server,
 # the CWD is typically NOT the project directory, so dotenv/load
 # (which searches CWD) would silently fail to find the .env file.
+#
+# Use overload (not load) because when multiple MCP servers run in the
+# same process (e.g., magi-archive-mcp + hyperon-wiki-mcp in Claude Code),
+# the first server's .env would set DECKO_API_BASE_URL and Dotenv.load
+# would silently skip this server's .env values.
 _gem_root = File.expand_path("../../../../..", __FILE__)
-Dotenv.load(File.join(_gem_root, ".env"))
+Dotenv.overload(File.join(_gem_root, ".env"))
 
 module Hyperon
   module Wiki
