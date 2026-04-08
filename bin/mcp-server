@@ -68,6 +68,12 @@ require_relative "../lib/hyperon/wiki/mcp/server/tools/find_in_card"
 require_relative "../lib/hyperon/wiki/mcp/server/tools/get_card_outline"
 require_relative "../lib/hyperon/wiki/mcp/server/tools/submit_feedback"
 
+# Tier 2/3: Section editing, diffing, stats, templates
+require_relative "../lib/hyperon/wiki/mcp/server/tools/update_section"
+require_relative "../lib/hyperon/wiki/mcp/server/tools/diff_card"
+require_relative "../lib/hyperon/wiki/mcp/server/tools/get_card_stats"
+require_relative "../lib/hyperon/wiki/mcp/server/tools/template_card"
+
 # Initialize the Hyperon Wiki tools
 # This creates an authenticated client using environment variables:
 # - MCP_USERNAME + MCP_PASSWORD (recommended)
@@ -150,7 +156,13 @@ server = ::MCP::Server.new(
     Hyperon::Wiki::Mcp::Server::Tools::FindAndReplace,
     Hyperon::Wiki::Mcp::Server::Tools::FindInCard,
     Hyperon::Wiki::Mcp::Server::Tools::GetCardOutline,
-    Hyperon::Wiki::Mcp::Server::Tools::SubmitFeedback
+    Hyperon::Wiki::Mcp::Server::Tools::SubmitFeedback,
+
+    # Tier 2/3: Section editing, diffing, stats, templates
+    Hyperon::Wiki::Mcp::Server::Tools::UpdateSection,
+    Hyperon::Wiki::Mcp::Server::Tools::DiffCard,
+    Hyperon::Wiki::Mcp::Server::Tools::GetCardStats,
+    Hyperon::Wiki::Mcp::Server::Tools::TemplateCard
   ],
   server_context: server_context
 )

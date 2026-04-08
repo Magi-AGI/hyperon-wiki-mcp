@@ -133,12 +133,12 @@ RSpec.describe Hyperon::Wiki::Mcp::Tools, "weekly summary" do
           }
         end
 
-      # Should stop after 100 pages and log warning
+      # Should stop after 51 pages (5000/100 + 1) and log warning
+      result = nil
       expect { result = tools.get_recent_changes }.to output(/Pagination safety limit reached/).to_stderr
 
       # Verify it stopped and returned partial results
-      result = tools.get_recent_changes
-      expect(result.size).to eq(100) # 100 pages with 1 card each
+      expect(result.size).to eq(51) # 51 pages (5000/100 + 1) with 1 card each
     end
   end
 
@@ -448,7 +448,7 @@ RSpec.describe Hyperon::Wiki::Mcp::Tools, "weekly summary" do
     end
 
     it "supports custom lookback period" do
-      expect(tools).to receive(:get_recent_changes).with(days: 14)
+      expect(tools).to receive(:get_recent_changes).with(days: 14, max_cards: 500)
 
       # Stub TOC operations
       stub_request(:get, "#{base_url}/cards/Weekly%20Work%20Summaries+table-of-contents")

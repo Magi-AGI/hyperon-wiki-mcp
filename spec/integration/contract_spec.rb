@@ -78,7 +78,7 @@ RSpec.describe "Hyperon::Wiki::Mcp Contract Tests", type: :integration do
       # Recorded response from live server (Phase 2)
       stub_request(:get, "#{base_url}/cards/Business%20Plan/children")
         .with(
-          query: { limit: 50, offset: 0, include_virtual: false },
+          query: { limit: 50, offset: 0, include_virtual: false, depth: 3 },
           headers: { "Authorization" => "Bearer #{valid_token}" }
         )
         .to_return(

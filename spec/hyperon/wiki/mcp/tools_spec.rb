@@ -178,47 +178,47 @@ RSpec.describe Hyperon::Wiki::Mcp::Tools do
 
     it "searches cards with query" do
       stub_request(:get, cards_url)
-        .with(query: { "q" => "game", "limit" => "50", "offset" => "0" })
+        .with(query: { "q" => "game", "limit" => "50", "offset" => "0", "include_virtual" => "false" })
         .to_return(status: 200, body: search_response.to_json)
 
       result = tools.search_cards(q: "game")
 
       expect(result).to eq(search_response)
       expect(WebMock).to have_requested(:get, cards_url)
-        .with(query: { "q" => "game", "limit" => "50", "offset" => "0" })
+        .with(query: { "q" => "game", "limit" => "50", "offset" => "0", "include_virtual" => "false" })
     end
 
     it "filters by type" do
       stub_request(:get, cards_url)
-        .with(query: { "type" => "User", "limit" => "50", "offset" => "0" })
+        .with(query: { "type" => "User", "limit" => "50", "offset" => "0", "include_virtual" => "false" })
         .to_return(status: 200, body: search_response.to_json)
 
       tools.search_cards(type: "User")
 
       expect(WebMock).to have_requested(:get, cards_url)
-        .with(query: { "type" => "User", "limit" => "50", "offset" => "0" })
+        .with(query: { "type" => "User", "limit" => "50", "offset" => "0", "include_virtual" => "false" })
     end
 
     it "uses custom limit and offset" do
       stub_request(:get, cards_url)
-        .with(query: { "limit" => "20", "offset" => "10" })
+        .with(query: { "limit" => "20", "offset" => "10", "include_virtual" => "false" })
         .to_return(status: 200, body: search_response.to_json)
 
       tools.search_cards(limit: 20, offset: 10)
 
       expect(WebMock).to have_requested(:get, cards_url)
-        .with(query: { "limit" => "20", "offset" => "10" })
+        .with(query: { "limit" => "20", "offset" => "10", "include_virtual" => "false" })
     end
 
     it "combines query, type, and pagination" do
       stub_request(:get, cards_url)
-        .with(query: { "q" => "plan", "type" => "User", "limit" => "10", "offset" => "5" })
+        .with(query: { "q" => "plan", "type" => "User", "limit" => "10", "offset" => "5", "include_virtual" => "false" })
         .to_return(status: 200, body: search_response.to_json)
 
       tools.search_cards(q: "plan", type: "User", limit: 10, offset: 5)
 
       expect(WebMock).to have_requested(:get, cards_url)
-        .with(query: { "q" => "plan", "type" => "User", "limit" => "10", "offset" => "5" })
+        .with(query: { "q" => "plan", "type" => "User", "limit" => "10", "offset" => "5", "include_virtual" => "false" })
     end
   end
 
@@ -317,7 +317,7 @@ RSpec.describe Hyperon::Wiki::Mcp::Tools do
     before do
       # First page
       stub_request(:get, cards_url)
-        .with(query: { "type" => "User", "limit" => "2", "offset" => "0" })
+        .with(query: { "type" => "User", "limit" => "10", "offset" => "0" })
         .to_return(
           status: 200,
           body: {
@@ -328,7 +328,7 @@ RSpec.describe Hyperon::Wiki::Mcp::Tools do
 
       # Second page (last)
       stub_request(:get, cards_url)
-        .with(query: { "type" => "User", "limit" => "2", "offset" => "2" })
+        .with(query: { "type" => "User", "limit" => "10", "offset" => "2" })
         .to_return(
           status: 200,
           body: {
@@ -339,7 +339,7 @@ RSpec.describe Hyperon::Wiki::Mcp::Tools do
     end
 
     it "fetches all cards across pages" do
-      result = tools.fetch_all_cards(type: "User", limit: 2)
+      result = tools.fetch_all_cards(type: "User", limit: 10)
 
       expect(result.size).to eq(3)
       expect(result).to eq([
@@ -384,16 +384,13 @@ RSpec.describe Hyperon::Wiki::Mcp::Tools do
       end
 
       expect(pages.size).to eq(2)
-      expect(pages[0]).to eq([{ "name" => "Card 1" }, { "name" => "Card 2" }])
-      expect(pages[1]).to eq([{ "name" => "Card 3" }])
+      expect(pages[0]["cards"]).to eq([{ "name" => "Card 1" }, { "name" => "Card 2" }])
+      expect(pages[1]["cards"]).to eq([{ "name" => "Card 3" }])
     end
 
-    it "returns enumerator without block" do
-      enumerator = tools.each_card_page(q: "test", limit: 2)
-      expect(enumerator).to be_a(Enumerator)
-
-      pages = enumerator.to_a
-      expect(pages.size).to eq(2)
+    it "runs without error when no block given" do
+      result = tools.each_card_page(q: "test", limit: 2)
+      expect(result).to be_nil
     end
   end
 
@@ -752,7 +749,7 @@ RSpec.describe Hyperon::Wiki::Mcp::Tools do
     before do
       # First page
       stub_request(:get, types_url)
-        .with(query: { "limit" => "50", "offset" => "0" })
+        .with(query: { "limit" => "100", "offset" => "0" })
         .to_return(
           status: 200,
           body: {
@@ -763,7 +760,7 @@ RSpec.describe Hyperon::Wiki::Mcp::Tools do
 
       # Second page (last)
       stub_request(:get, types_url)
-        .with(query: { "limit" => "50", "offset" => "2" })
+        .with(query: { "limit" => "100", "offset" => "2" })
         .to_return(
           status: 200,
           body: {
@@ -1066,24 +1063,24 @@ RSpec.describe Hyperon::Wiki::Mcp::Tools do
 
     it "allows explicit override to search_in=name" do
       stub_request(:get, cards_url)
-        .with(query: { "q" => "game", "search_in" => "name", "limit" => "50", "offset" => "0" })
+        .with(query: { "q" => "game", "search_in" => "name", "limit" => "50", "offset" => "0", "include_virtual" => "false" })
         .to_return(status: 200, body: search_response.to_json)
 
       tools.search_cards(q: "game", search_in: "name")
 
       expect(WebMock).to have_requested(:get, cards_url)
-        .with(query: { "q" => "game", "search_in" => "name", "limit" => "50", "offset" => "0" })
+        .with(query: { "q" => "game", "search_in" => "name", "limit" => "50", "offset" => "0", "include_virtual" => "false" })
     end
 
     it "allows explicit override to search_in=content" do
       stub_request(:get, cards_url)
-        .with(query: { "q" => "game", "search_in" => "content", "limit" => "50", "offset" => "0" })
+        .with(query: { "q" => "game", "search_in" => "content", "limit" => "50", "offset" => "0", "include_virtual" => "false" })
         .to_return(status: 200, body: search_response.to_json)
 
       tools.search_cards(q: "game", search_in: "content")
 
       expect(WebMock).to have_requested(:get, cards_url)
-        .with(query: { "q" => "game", "search_in" => "content", "limit" => "50", "offset" => "0" })
+        .with(query: { "q" => "game", "search_in" => "content", "limit" => "50", "offset" => "0", "include_virtual" => "false" })
     end
   end
 

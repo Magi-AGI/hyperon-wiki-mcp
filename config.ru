@@ -78,7 +78,13 @@ mcp_server = ::MCP::Server.new(
     Hyperon::Wiki::Mcp::Server::Tools::FindAndReplace,
     Hyperon::Wiki::Mcp::Server::Tools::FindInCard,
     Hyperon::Wiki::Mcp::Server::Tools::GetCardOutline,
-    Hyperon::Wiki::Mcp::Server::Tools::SubmitFeedback
+    Hyperon::Wiki::Mcp::Server::Tools::SubmitFeedback,
+
+    # Tier 2/3: Section editing, diffing, stats, templates
+    Hyperon::Wiki::Mcp::Server::Tools::UpdateSection,
+    Hyperon::Wiki::Mcp::Server::Tools::DiffCard,
+    Hyperon::Wiki::Mcp::Server::Tools::GetCardStats,
+    Hyperon::Wiki::Mcp::Server::Tools::TemplateCard
   ],
   server_context: server_context
 )
