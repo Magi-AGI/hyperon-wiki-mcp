@@ -32,6 +32,7 @@ module Hyperon
         #
         # @param name [String] the card name
         # @param with_children [Boolean] include child cards (default: false)
+        # @param rendered [Boolean] return fully rendered HTML with inclusions resolved (default: false)
         # @return [Hash] card data with keys: name, content, type, id, url, etc.
         # @raise [Client::NotFoundError] if card doesn't exist
         # @raise [Client::AuthorizationError] if user lacks permission to view card
@@ -43,9 +44,14 @@ module Hyperon
         # @example With children
         #   card = tools.get_card("Business Plan", with_children: true)
         #   # => { "name" => "Business Plan", "children" => [...], ... }
-        def get_card(name, with_children: false)
+        #
+        # @example Rendered (all inclusions resolved)
+        #   card = tools.get_card("Administrator", rendered: true)
+        #   # => { "name" => "Administrator", "content" => "<full rendered HTML>", "rendered" => true }
+        def get_card(name, with_children: false, rendered: false)
           params = {}
           params[:with_children] = true if with_children
+          params[:rendered] = true if rendered
 
           client.get("/cards/#{encode_card_name(name)}", **params)
         end

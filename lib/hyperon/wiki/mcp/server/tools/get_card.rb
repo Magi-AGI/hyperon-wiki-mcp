@@ -39,16 +39,21 @@ module Hyperon
                   description: "Character offset to start content from (default: 0). Use with max_content_length to paginate through large cards.",
                   default: 0,
                   minimum: 0
+                },
+                rendered: {
+                  type: "boolean",
+                  description: "Return fully rendered HTML with all inclusions/nests ({{...}}) resolved, as the end user would see it. Useful for cards with nested subcards or complex templates. Default: false (returns raw stored content).",
+                  default: false
                 }
               },
               required: ["name"]
             )
 
             class << self
-              def call(name:, with_children: false, max_content_length: 8000, content_offset: 0, server_context:)
+              def call(name:, with_children: false, max_content_length: 8000, content_offset: 0, rendered: false, server_context:)
                 tools = server_context[:magi_tools]
 
-                card = tools.get_card(name, with_children: with_children)
+                card = tools.get_card(name, with_children: with_children, rendered: rendered)
 
                 # Build hybrid JSON response with text field for markdown
                 result = build_response(card, max_content_length: max_content_length, content_offset: content_offset)
