@@ -11,7 +11,7 @@ module Hyperon
           # MCP Tool for appending content to a card
           class AppendContent < ::MCP::Tool
             Client = Hyperon::Wiki::Mcp::Client
-            description "Append content to the end of an existing card. Works on any content format (HTML, markdown, plain text). More efficient than get_card + update_card for adding content."
+            description "Append content to the end of an existing card without fetching it first. Works on raw stored content (HTML, markdown, plain text, wiki links). Use separator='\\n' for newline or '<br>' for HTML break between old and new content. Prefer this over get_card + update_card when adding to the end of a card."
             annotations(
               read_only_hint: false,
               destructive_hint: false

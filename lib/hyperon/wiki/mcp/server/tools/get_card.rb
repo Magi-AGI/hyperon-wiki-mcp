@@ -10,7 +10,7 @@ module Hyperon
         module Tools
           # MCP Tool for fetching a single card from the wiki
           class GetCard < ::MCP::Tool
-            description "Get a single card by name from the Hyperon Wiki wiki. Note: Pointer cards contain references to other cards (use list_children to see them). Search cards contain dynamic queries (content shows query, not results). Use underscores for exact name matches."
+            description "Get a single card by name from the Hyperon Wiki. Returns raw stored content by default (often HTML with unresolved {{inclusions}}). Pass rendered=true to get fully resolved content as the end user sees it — essential for cards with nested subcards or templates. Note: Pointer cards contain references (use list_children); Search cards show queries not results."
 
             annotations(
               read_only_hint: true,

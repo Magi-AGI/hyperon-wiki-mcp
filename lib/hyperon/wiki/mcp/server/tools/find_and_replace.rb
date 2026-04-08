@@ -11,7 +11,7 @@ module Hyperon
           # MCP Tool for find-and-replace within card content
           class FindAndReplace < ::MCP::Tool
             Client = Hyperon::Wiki::Mcp::Client
-            description "Find and replace text in a card's content. Operates on raw stored content (HTML, markdown, etc.) without needing to fetch the full card first. Much more efficient than get_card + update_card for targeted edits."
+            description "Find and replace text in a card's raw stored content server-side, without fetching the card first. Supports first/last/all occurrence modes. Returns error if text not found. Use find_in_card first to locate the exact text with context, then use this tool to replace it. Much more efficient than get_card + update_card for targeted edits."
             annotations(
               read_only_hint: false,
               destructive_hint: false

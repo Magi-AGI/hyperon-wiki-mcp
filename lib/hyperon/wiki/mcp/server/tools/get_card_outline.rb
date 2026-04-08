@@ -11,7 +11,7 @@ module Hyperon
           # MCP Tool for getting a card's heading structure
           class GetCardOutline < ::MCP::Tool
             Client = Hyperon::Wiki::Mcp::Client
-            description "Get the heading outline of a card without fetching full content. Returns the heading structure (HTML h1-h6 and Markdown #) with positions. Useful for understanding card structure before reading or updating specific sections."
+            description "Get the heading structure of a card without fetching full content. Returns all headings (HTML h1-h6 and Markdown #) with their level, text, and character position. Use this to understand a card's structure before deciding which section to read (via get_card with content_offset) or edit (via find_and_replace). Also reports content_length and card type."
             annotations(
               read_only_hint: true,
               destructive_hint: false

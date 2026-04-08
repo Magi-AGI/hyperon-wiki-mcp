@@ -11,7 +11,7 @@ module Hyperon
           # MCP Tool for searching within a card's content
           class FindInCard < ::MCP::Tool
             Client = Hyperon::Wiki::Mcp::Client
-            description "Search for text within a card's content and return matching excerpts with surrounding context. Much more efficient than get_card for finding specific content in large cards. Use with find_and_replace for targeted edits."
+            description "Search for text within a card's raw stored content and return matching excerpts with surrounding context. Returns match positions and context without fetching the full card. Use this before find_and_replace to locate exact text. Also useful for checking if specific content exists in a large card without reading the whole thing."
             annotations(
               read_only_hint: true,
               destructive_hint: false
