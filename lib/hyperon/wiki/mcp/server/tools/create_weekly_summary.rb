@@ -46,8 +46,7 @@ module Hyperon
                   description: "Whether to create the card on the wiki (default: false, returns markdown preview for review first)",
                   default: false
                 }
-              },
-              required: []
+              }
             )
 
             class << self

@@ -55,8 +55,7 @@ module Hyperon
                   default: 0,
                   minimum: 0
                 }
-              },
-              required: []
+              }
             )
 
             class << self

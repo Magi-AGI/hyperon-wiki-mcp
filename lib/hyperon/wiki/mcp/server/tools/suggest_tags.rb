@@ -37,8 +37,7 @@ module Hyperon
                   minimum: 1,
                   maximum: 20
                 }
-              },
-              required: []
+              }
             )
 
             class << self

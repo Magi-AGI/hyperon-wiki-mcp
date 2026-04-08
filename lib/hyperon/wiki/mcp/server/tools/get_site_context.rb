@@ -18,8 +18,7 @@ module Hyperon
             )
 
             input_schema(
-              properties: {},
-              required: []
+              properties: {}
             )
 
             class << self

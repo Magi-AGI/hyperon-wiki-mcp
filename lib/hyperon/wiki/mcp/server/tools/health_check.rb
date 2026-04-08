@@ -23,8 +23,7 @@ module Hyperon
                   description: "Get detailed health information (default: true for full check, false for quick ping)",
                   default: true
                 }
-              },
-              required: []
+              }
             )
 
             class << self

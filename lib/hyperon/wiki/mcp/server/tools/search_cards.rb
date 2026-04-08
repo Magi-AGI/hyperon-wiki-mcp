@@ -53,8 +53,7 @@ module Hyperon
                   description: "Include virtual cards (empty junction cards with no content) in results. Default: false (filters them out).",
                   default: false
                 }
-              },
-              required: []
+              }
             )
 
             class << self
