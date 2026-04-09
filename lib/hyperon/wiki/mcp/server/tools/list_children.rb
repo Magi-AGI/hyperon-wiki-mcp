@@ -27,10 +27,16 @@ module Hyperon
                 },
                 limit: {
                   type: "integer",
-                  description: "Maximum number of children to return (default: 20 for faster responses)",
+                  description: "Maximum number of children to return (default: 20, max: 100). Use offset to paginate through large sets.",
                   default: 20,
                   minimum: 1,
                   maximum: 100
+                },
+                offset: {
+                  type: "integer",
+                  description: "Number of children to skip for pagination (default: 0). Use with limit to page through cards with many children.",
+                  default: 0,
+                  minimum: 0
                 },
                 depth: {
                   type: "integer",
@@ -49,10 +55,10 @@ module Hyperon
             )
 
             class << self
-              def call(parent_name:, limit: 20, depth: 3, include_virtual: false, server_context:)
+              def call(parent_name:, limit: 20, offset: 0, depth: 3, include_virtual: false, server_context:)
                 tools = server_context[:magi_tools]
 
-                children = tools.list_children(parent_name, limit: limit, include_virtual: include_virtual, depth: depth)
+                children = tools.list_children(parent_name, limit: limit, offset: offset, include_virtual: include_virtual, depth: depth)
 
                 # Build hybrid JSON response
                 response = build_response(parent_name, children)
@@ -93,9 +99,12 @@ module Hyperon
 
               def build_response(parent_name, children)
                 child_cards = children["children"] || []
-                total = children["total"] || child_cards.size
+                total = children["child_count"] || child_cards.size
+                limit = children["limit"] || child_cards.size
+                offset = children["offset"] || 0
+                truncated = child_cards.size < total - offset
+                next_offset = truncated ? offset + limit : nil
 
-                # Transform to ChatGPT-compatible results array
                 result_items = child_cards.map do |card|
                   card_url = "https://wiki.hyperon.dev/#{card['name'].to_s.gsub(' ', '_')}"
                   {
@@ -116,23 +125,38 @@ module Hyperon
                   url: parent_url,
                   results: result_items,
                   total: total,
+                  returned: child_cards.size,
+                  offset: offset,
+                  truncated: truncated,
+                  next_offset: next_offset,
                   text: format_children(parent_name, children)
                 }
               end
 
               def format_children(parent_name, children)
+                child_cards = children["children"] || []
+                total = children["child_count"] || child_cards.size
+                offset = children["offset"] || 0
+                limit = children["limit"] || child_cards.size
+
                 parts = []
                 parts << "# Children of #{parent_name}"
                 parts << ""
 
-                if children["children"]&.any?
-                  total = children["total"] || children["children"].size
-                  parts << "Found #{total} child cards:"
+                if child_cards.any?
+                  parts << "**Showing #{child_cards.size} of #{total} total children** (offset: #{offset})"
                   parts << ""
 
-                  children["children"].each_with_index do |child, idx|
-                    parts << "#{idx + 1}. **#{child['name']}** (#{child['type']})"
+                  child_cards.each_with_index do |child, idx|
+                    parts << "#{offset + idx + 1}. **#{child['name']}** (#{child['type']})"
                     parts << "   ID: #{child['id']}, Updated: #{child['updated_at']}" if child['updated_at']
+                  end
+
+                  if child_cards.size + offset < total
+                    remaining = total - offset - child_cards.size
+                    next_off = offset + limit
+                    parts << ""
+                    parts << "**#{remaining} more children available.** Use `list_children(parent_name: \"#{parent_name}\", offset: #{next_off})` to get the next page."
                   end
                 else
                   parts << "No child cards found."
