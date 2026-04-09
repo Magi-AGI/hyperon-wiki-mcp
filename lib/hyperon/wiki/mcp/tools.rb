@@ -558,14 +558,36 @@ module Hyperon
         end
 
         # Create a file or image card from a remote URL.
+        # Downloads the file in the MCP server process (not Decko) to avoid
+        # blocking Decko's single-threaded Thin server, then uploads as base64.
         #
         # @param name [String] card name
         # @param type [String] "File" or "Image"
         # @param url [String] URL to the file
         # @return [Hash] card data with file_url
         def upload_from_url(name, type:, url:)
-          client.post("/cards/#{encode_card_name(name)}/upload",
-                      type: type, remote_url: url)
+          require "net/http"
+          require "base64"
+
+          uri = URI.parse(url)
+          http = Net::HTTP.new(uri.host, uri.port)
+          http.use_ssl = (uri.scheme == "https")
+          http.open_timeout = 10
+          http.read_timeout = 30
+          response = http.get(uri.request_uri)
+
+          unless response.is_a?(Net::HTTPSuccess)
+            raise Client::ValidationError.new(
+              "Failed to download from URL: HTTP #{response.code}",
+              status: response.code.to_i, error_code: "download_error", details: {}
+            )
+          end
+
+          filename = File.basename(uri.path)
+          filename = "download.dat" if filename.empty? || !filename.include?(".")
+          file_data = Base64.strict_encode64(response.body)
+
+          upload_file(name, type: type, file_data: file_data, filename: filename)
         end
 
         # Get the download URL for a File or Image card.

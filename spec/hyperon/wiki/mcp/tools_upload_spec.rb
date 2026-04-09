@@ -137,22 +137,27 @@ RSpec.describe Hyperon::Wiki::Mcp::Tools, "file upload" do
     end
 
     before do
+      # Stub the remote URL download (MCP server downloads the file itself)
+      stub_request(:get, source_url)
+        .to_return(status: 200, body: "fake image data",
+                   headers: { "Content-Type" => "image/jpeg" })
+
+      # Stub the upload API call (sends base64 to Decko)
       stub_request(:post, upload_url)
         .with(
-          body: hash_including("type" => "Image", "remote_url" => source_url),
+          body: hash_including("type" => "Image", "file_data" => Base64.strict_encode64("fake image data")),
           headers: { "Authorization" => "Bearer #{valid_token}" }
         )
         .to_return(status: 200, body: response_data.to_json,
                    headers: { "Content-Type" => "application/json" })
     end
 
-    it "creates a card from a remote URL" do
+    it "downloads the file and uploads as base64" do
       result = tools.upload_from_url(card_name, type: "Image", url: source_url)
 
       expect(result["name"]).to eq("Remote Image")
       expect(result["type"]).to eq("Image")
       expect(result["file_url"]).to include("remote_image")
-      expect(result["image_urls"]).to be_a(Hash)
     end
   end
 

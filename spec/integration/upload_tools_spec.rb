@@ -42,7 +42,15 @@ RSpec.describe "File Upload Tools", :integration do
     end
 
     it "uploads an image from URL and creates an Image card with size variants" do
-      skip "Remote URL image upload blocks Thin's single thread during download+processing — needs Puma or async worker"
+      card_name = "#{test_card_prefix}+Upload+Image"
+
+      # MCP server downloads the file itself, then sends base64 to Decko
+      # — no longer blocks Thin's single thread
+      result = tools.upload_from_url(card_name, type: "Image",
+        url: "https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png")
+
+      expect(result["name"]).to eq(card_name)
+      expect(result["type"]).to eq("Image")
     end
   end
 

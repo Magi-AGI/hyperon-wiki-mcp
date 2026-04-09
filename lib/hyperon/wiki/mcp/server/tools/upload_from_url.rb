@@ -11,7 +11,7 @@ module Hyperon
           # MCP Tool for creating file/image cards from a remote URL
           class UploadFromUrl < ::MCP::Tool
             Client = Hyperon::Wiki::Mcp::Client
-            description "Create a file or image card from a remote URL. Downloads the file server-side and stores it on the wiki. WARNING: This blocks the single-threaded Decko server during download — prefer upload_file with base64-encoded data for reliability. Only use this for small files from fast, reliable URLs."
+            description "Create a file or image card from a remote URL. Downloads the file in the MCP server process (not blocking the wiki), then uploads it. Supports HTTP and HTTPS URLs with 10s connect / 30s read timeouts."
             annotations(
               read_only_hint: false,
               destructive_hint: false
