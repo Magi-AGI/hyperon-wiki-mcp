@@ -545,6 +545,42 @@ module Hyperon
           client.put(path, new_name: new_name, update_referers: update_referers)
         end
 
+        # Upload a file or image to create or update a card.
+        #
+        # @param name [String] card name
+        # @param type [String] "File" or "Image"
+        # @param file_data [String] base64-encoded file content
+        # @param filename [String] original filename (e.g., "diagram.png")
+        # @return [Hash] card data with file_url and image_urls
+        def upload_file(name, type:, file_data:, filename:)
+          client.post("/cards/#{encode_card_name(name)}/upload",
+                      type: type, file_data: file_data, filename: filename)
+        end
+
+        # Create a file or image card from a remote URL.
+        #
+        # @param name [String] card name
+        # @param type [String] "File" or "Image"
+        # @param url [String] URL to the file
+        # @return [Hash] card data with file_url
+        def upload_from_url(name, type:, url:)
+          client.post("/cards/#{encode_card_name(name)}/upload",
+                      type: type, remote_url: url)
+        end
+
+        # Get the download URL for a File or Image card.
+        #
+        # @param name [String] card name
+        # @param size [String, nil] image size variant: "icon", "small", "medium", "large", "original"
+        # @return [Hash] with file_url and image_urls keys
+        def get_file_url(name, size: nil)
+          result = client.get("/cards/#{encode_card_name(name)}/file_url")
+          if size && result["image_urls"]
+            result["selected_url"] = result["image_urls"][size] || result["file_url"]
+          end
+          result
+        end
+
         # Get the default content template for a card type
         #
         # Templates are stored in Decko's +*type+*default rule cards.

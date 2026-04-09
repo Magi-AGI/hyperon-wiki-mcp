@@ -60,6 +60,11 @@ require_relative "../lib/hyperon/wiki/mcp/server/tools/spoiler_scan"
 # Auto-linking
 require_relative "../lib/hyperon/wiki/mcp/server/tools/auto_link"
 
+# File/image upload
+require_relative "../lib/hyperon/wiki/mcp/server/tools/upload_file"
+require_relative "../lib/hyperon/wiki/mcp/server/tools/upload_from_url"
+require_relative "../lib/hyperon/wiki/mcp/server/tools/get_file_url"
+
 # Content editing tools
 require_relative "../lib/hyperon/wiki/mcp/server/tools/append_content"
 require_relative "../lib/hyperon/wiki/mcp/server/tools/prepend_content"
@@ -149,6 +154,11 @@ server = ::MCP::Server.new(
 
     # Auto-linking
     Hyperon::Wiki::Mcp::Server::Tools::AutoLink,
+
+    # File/image upload
+    Hyperon::Wiki::Mcp::Server::Tools::UploadFile,
+    Hyperon::Wiki::Mcp::Server::Tools::UploadFromUrl,
+    Hyperon::Wiki::Mcp::Server::Tools::GetFileUrl,
 
     # Content editing tools
     Hyperon::Wiki::Mcp::Server::Tools::AppendContent,

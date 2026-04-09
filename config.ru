@@ -72,6 +72,11 @@ mcp_server = ::MCP::Server.new(
     # Auto-linking
     Hyperon::Wiki::Mcp::Server::Tools::AutoLink,
 
+    # File/image upload
+    Hyperon::Wiki::Mcp::Server::Tools::UploadFile,
+    Hyperon::Wiki::Mcp::Server::Tools::UploadFromUrl,
+    Hyperon::Wiki::Mcp::Server::Tools::GetFileUrl,
+
     # Content editing tools
     Hyperon::Wiki::Mcp::Server::Tools::AppendContent,
     Hyperon::Wiki::Mcp::Server::Tools::PrependContent,
