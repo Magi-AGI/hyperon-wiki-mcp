@@ -12,7 +12,7 @@ module Hyperon
           class ListChildren < ::MCP::Tool
             # Alias Client for cleaner error handling
             Client = Hyperon::Wiki::Mcp::Client
-            description "List all child cards of a parent card"
+            description "List child cards of a parent card with pagination. Returns the true total count of all children (child_count) regardless of limit, plus truncated flag and next_offset for paginating through large sets. Always check total vs returned count — cards can have hundreds of children."
 
             annotations(
               read_only_hint: true,

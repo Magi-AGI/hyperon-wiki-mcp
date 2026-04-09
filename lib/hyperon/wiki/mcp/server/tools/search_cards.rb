@@ -31,9 +31,9 @@ module Hyperon
                 },
                 search_in: {
                   type: "string",
-                  description: "Where to search: 'both' (default, recommended - searches card names only), 'content' (slower - searches card content only), or 'both' (comprehensive - searches both names and content)",
+                  description: "Where to search: 'name' (default, fastest - searches card names only), 'content' (slower - searches card content only), or 'both' (comprehensive - searches both names and content)",
                   enum: ["name", "content", "both"],
-                  default: "both"
+                  default: "name"
                 },
                 limit: {
                   type: "integer",
