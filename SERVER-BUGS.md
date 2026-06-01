@@ -4,17 +4,19 @@ This document tracks bugs discovered in the `magi-archive` server (wiki.magi-agi
 
 ## Summary Status
 
-**All reported bugs have been resolved! ✅**
-
 - **Bug #1**: `/cards/:name/children` 500 error - ✅ FIXED
 - **Bug #2**: `/cards/batch` missing mode field - ✅ WORKAROUND (behavior correct)
 - **Bug #3**: `/render` endpoints 404 error - ✅ FIXED
+- **Bug #4**: `create_card` spurious "already exists" after successful create - ⚠️ OPEN (filed 2026-04-25)
+- **Bug #5**: `restore_card` cannot find `+tag` Pointer subcards in trash - ⚠️ OPEN (filed 2026-04-25)
 
 **Integration Test Results (as of 2025-12-11):**
 - 132 examples passing ✅
 - 0 failures
 - 3 pending (expected - documented limitations)
 - All MCP endpoints operational
+
+Bugs #4 and #5 surface only in cluster-pilot wiki-edit workflows (heavy create_card / restore_card usage on `+tag` Pointer subcards) and have client-side workarounds documented below.
 
 ## Bug #1: `/cards/:name/children` Endpoint Returns NoMethodError ✅ FIXED
 
@@ -254,8 +256,79 @@ Implement the `/api/mcp/render` and `/api/mcp/render/markdown` endpoints as spec
 
 ---
 
+## Bug #4: `create_card` Returns Spurious "already exists" After Successful Create ⚠️ OPEN
+
+**Severity**: MEDIUM
+**Impact**: Forces every `create_card` caller to follow up with `get_card` to determine real state.
+**Status**: ⚠️ OPEN — filed via `submit_feedback` 2026-04-25 during the Hyperon Wiki PLN cluster pilot.
+
+### Description
+
+`create_card` can return a validation error along the lines of "card already exists" *after* the card has actually been written successfully. The card is present in the wiki when looked up immediately afterward, with the expected content and ID.
+
+### Reproduction context
+
+Encountered repeatedly while creating new RawData parents and `+tag` Pointer subcards during the PLN, ECAN, OpenPsi, and AtomSpace Backend Integration cluster pilots (2026-04-08 through 2026-04-29). Not consistently reproducible from a clean state — appears to be a race or post-write validation pass that fires after the underlying create has already committed.
+
+### Workaround
+
+Treat the error as advisory rather than authoritative: always verify with `get_card` before retrying or aborting. If `get_card` returns the expected content, the create succeeded and the error can be ignored.
+
+---
+
+## Bug #5: `restore_card` Cannot Find `+tag` Pointer Subcards in Trash ⚠️ OPEN
+
+**Severity**: MEDIUM
+**Impact**: `restore_card` workflow is broken for tag pointers; callers must fall back to `create_card`.
+**Status**: ⚠️ OPEN — filed via `submit_feedback` 2026-04-25 during the Hyperon Wiki PLN cluster pilot.
+
+### Description
+
+`restore_card` returns "not found" for `+tag` Pointer subcards even though `list_trash` shows them present. Other cardtypes restore from trash without issue under the same caller; only the Pointer-cardtype `+tag` children are affected.
+
+### Reproduction context
+
+Encountered while attempting to undo accidental deletes of `+tag` subcards on Draft `+AI` proposal parents during cluster-pilot wiki edits.
+
+### Workaround
+
+Use `create_card` to recreate the `+tag` subcard with the original content (typically a single `ai_generated` line). The `create_card` succeeds despite Bug #4's spurious error — verify with `get_card` afterward.
+
+---
+
+## Operational conventions discovered during cluster-pilot edits
+
+The following are **not bugs** but are non-obvious server behaviors that future MCP clients (and orchestrating agents) should know about. Captured here so they live next to the MCP server code rather than only in the wiki repo's CLAUDE.md.
+
+### `+tag` plural-alias normalization
+
+The wiki normalizes trailing-`s` plurals on tag subcards: `<parent>+tag` and `<parent>+tags` resolve to the same card. The canonical form is singular `+tag`. The Pointer cardtype expects plain newline-separated tag strings (e.g., `ai_generated`), not JSON arrays.
+
+### Draft parents auto-generate empty `+tag` subcards
+
+When a Draft cardtype parent is created, the wiki creates an empty `+tag` Pointer subcard automatically. Callers that need to populate tags should use `update_card` on the existing `+tag` rather than `create_card` (which would race the auto-generation).
+
+### Published vs Draft edit semantics
+
+- Draft cardtype: edit directly via `update_card`.
+- Published cardtype: requires a `+AI` Draft child carrying the proposed diff — direct `update_card` against the Published parent is rejected by the server.
+
+### Concurrent-write protocol (orchestrator-side, not server-side)
+
+Cluster-pilot wiki edits are run with these client-side rules to keep the audit trail clean:
+
+- **One writer only**: the orchestrating model executes `create_card` / `update_card` / `delete_card`. Advisory models do not write wiki state, even when invited to.
+- **Sequential calls, no parallel batches** for wiki writes.
+- **Verify after every write**: `get_card` immediately after `create_card` / `update_card` to confirm the change landed (and to disambiguate Bug #4's spurious "already exists").
+- **Maintain an audit trail**: name, cardtype, returned result, verified ID, timestamp for each write.
+
+These conventions originated in the `hyperon-wiki` repo's cluster-pilot orchestration; they are MCP-client-side discipline, not server enforcement.
+
+---
+
 ## Recent Changes
 
+**2026-04-29** - Added Bugs #4 and #5 plus operational-conventions section from cluster-pilot wiki edits (PLN/ECAN/OpenPsi/AtomSpace pilots, 2026-04-08 through 2026-04-29)
 **2025-12-11** - Updated summary: All bugs resolved, integration tests passing
 **2025-12-08** - Added render endpoints bug after integration testing
 **2025-12-08** - Documented initial server bugs found during integration testing
