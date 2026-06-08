@@ -920,10 +920,7 @@ module Hyperon
         #   results = tools.search_by_tags(["Article", "Published"])
         #   results.each { |card| puts card["name"] }
         def search_by_tags(tags, limit: 50, offset: 0)
-          # Search using tag query for each tag (AND logic)
-          query = tags.map { |tag| "tags:#{tag}" }.join(" AND ")
-          result = search_cards(q: query, limit: limit, offset: offset)
-          result["cards"] || []
+          tag_match_search(tags, mode: :all, limit: limit, offset: offset)
         end
 
         # Get all tags used in the system
@@ -1007,10 +1004,36 @@ module Hyperon
         #   results = tools.search_by_tags_any(["Article", "Draft"])
         #   results.each { |card| puts card["name"] }
         def search_by_tags_any(tags, limit: 50)
-          # Search using tag query for any tag (OR logic)
-          query = tags.map { |tag| "tags:#{tag}" }.join(" OR ")
-          result = search_cards(q: query, limit: limit)
-          result["cards"] || []
+          tag_match_search(tags, mode: :any, limit: limit)
+        end
+
+        # Tags are stored as plain-text items in "<card>+tags" Pointer cards
+        # (there are no tag cards and thus no reference graph), so we locate the
+        # +tags cards whose content includes each tag and return their parent
+        # cards. Returns a search-result hash {"cards"=>[...], "total"=>N} so the
+        # SearchByTags tool can read results["cards"]/["total"] — previously
+        # these methods returned a bare Array, which the tool then indexed with a
+        # String ("no implicit conversion of String into Integer").
+        def tag_match_search(tags, mode: :all, limit: 50, offset: 0)
+          sets = Array(tags).map { |tag| parents_tagged_with(tag) }
+          parents =
+            if mode == :any
+              sets.flatten.uniq
+            else
+              sets.inject { |acc, set| acc & set } || []
+            end
+          page = parents.drop(offset.to_i).first(limit)
+          { "cards" => page.map { |name| { "name" => name, "type" => nil } },
+            "total" => parents.size }
+        end
+
+        # Parent card names whose "+tags" Pointer contains the given tag.
+        def parents_tagged_with(tag, scan_limit: 100)
+          result = search_cards(q: tag.to_s, search_in: "content", limit: scan_limit)
+          (result["cards"] || []).filter_map do |card|
+            name = card["name"].to_s
+            name.sub(/\+tags?\z/, "") if name =~ /\+tags?\z/
+          end.uniq
         end
 
         # === Card Relationship Operations ===
