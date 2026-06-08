@@ -21,11 +21,11 @@ module Hyperon
                 operation: {
                   type: "string",
                   enum: ["download", "list", "delete"],
-                  description: "Operation: 'download' creates and downloads a new backup, 'list' shows available backups, 'delete' removes a backup file"
+                  description: "Operation: 'download' fetches an existing backup by 'filename' (off-cloud retrieval) or, when no filename is given, creates and downloads a new backup; 'list' shows available backups; 'delete' removes a backup file"
                 },
                 filename: {
                   type: "string",
-                  description: "Backup filename (required for 'delete' operation)"
+                  description: "Backup filename: required for 'delete'; on 'download', fetch this specific existing backup (omit to create a fresh dump)"
                 },
                 save_path: {
                   type: "string",
@@ -41,7 +41,18 @@ module Hyperon
 
                 result = case operation
                         when "download"
-                          if save_path
+                          if filename
+                            # T8: fetch an EXISTING server-side backup by name so
+                            # accumulated backups can be pulled off-cloud, instead
+                            # of always creating a fresh dump.
+                            if save_path
+                              tools.download_database_backup_file(filename, save_path: save_path)
+                              { "status" => "success", "path" => save_path, "filename" => filename, "fetched_existing" => true }
+                            else
+                              data = tools.download_database_backup_file(filename)
+                              { "status" => "success", "size" => data.bytesize, "filename" => filename, "fetched_existing" => true }
+                            end
+                          elsif save_path
                             tools.download_database_backup(save_path: save_path)
                             { "status" => "success", "path" => save_path }
                           else
