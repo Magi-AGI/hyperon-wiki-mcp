@@ -1961,6 +1961,11 @@ module Hyperon
       def find_git_repos(base_path)
         repos = []
 
+        # Dir.glob treats backslashes as escape characters, so a Windows
+        # base_path (e.g. "E:\\GitHub\\Magi-AGI") matches nothing and the
+        # scan silently returns 0 repositories. Normalize separators first.
+        base_path = base_path.to_s.tr("\\", "/")
+
         return repos unless File.directory?(base_path)
 
         # Check if base_path itself is a git repo
