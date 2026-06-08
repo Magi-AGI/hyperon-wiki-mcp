@@ -49,16 +49,27 @@ module Hyperon
                   type: "boolean",
                   description: "Include virtual cards (empty junction cards with no content) in results. Default: false (filters them out).",
                   default: false
+                },
+                sort: {
+                  type: "string",
+                  enum: ["name", "created", "updated"],
+                  description: "Optional ordering field (name, created, or updated)"
+                },
+                dir: {
+                  type: "string",
+                  enum: ["asc", "desc"],
+                  description: "Sort direction (default: desc)",
+                  default: "desc"
                 }
               },
               required: ["parent_name"]
             )
 
             class << self
-              def call(parent_name:, limit: 20, offset: 0, depth: 3, include_virtual: false, server_context:)
+              def call(parent_name:, limit: 20, offset: 0, depth: 3, include_virtual: false, sort: nil, dir: nil, server_context:)
                 tools = server_context[:magi_tools]
 
-                children = tools.list_children(parent_name, limit: limit, offset: offset, include_virtual: include_virtual, depth: depth)
+                children = tools.list_children(parent_name, limit: limit, offset: offset, include_virtual: include_virtual, depth: depth, sort: sort, dir: dir)
 
                 # Build hybrid JSON response
                 response = build_response(parent_name, children)

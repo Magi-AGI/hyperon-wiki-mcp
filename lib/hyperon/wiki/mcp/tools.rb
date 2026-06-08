@@ -122,10 +122,12 @@ module Hyperon
         #
         # @example Paginated
         #   page1 = tools.list_children("Game Master", limit: 20, offset: 0)
-        def list_children(parent_name, limit: 50, offset: 0, include_virtual: false, depth: 3)
+        def list_children(parent_name, limit: 50, offset: 0, include_virtual: false, depth: 3, sort: nil, dir: nil)
           params = { limit: limit, offset: offset }
           params[:include_virtual] = include_virtual
           params[:depth] = depth if depth && depth > 1
+          params[:sort] = sort if sort
+          params[:dir] = dir if dir
 
           client.get("/cards/#{encode_card_name(parent_name)}/children", **params)
         end

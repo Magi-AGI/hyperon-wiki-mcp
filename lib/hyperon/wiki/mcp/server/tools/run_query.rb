@@ -52,20 +52,34 @@ module Hyperon
                   description: "Starting offset for pagination",
                   default: 0,
                   minimum: 0
+                },
+                sort: {
+                  type: "string",
+                  enum: ["name", "created", "updated"],
+                  description: "Optional ordering field (name, created, or updated)"
+                },
+                dir: {
+                  type: "string",
+                  enum: ["asc", "desc"],
+                  description: "Sort direction (default: desc)",
+                  default: "desc"
                 }
               },
               required: ["query"]
             )
 
             class << self
-              def call(query:, limit: 20, offset: 0, server_context:)
+              def call(query:, limit: 20, offset: 0, sort: nil, dir: nil, server_context:)
                 tools = server_context[:magi_tools]
 
                 # Validate query
                 return error_response("Query cannot be empty") if query.nil? || query.empty?
 
                 # Run the query
-                result = tools.client.post("/run_query", query: query, limit: limit, offset: offset)
+                post_body = { query: query, limit: limit, offset: offset }
+                post_body[:sort] = sort if sort
+                post_body[:dir] = dir if dir
+                result = tools.client.post("/run_query", **post_body)
 
                 # Build hybrid JSON response
                 response = build_response(result)
