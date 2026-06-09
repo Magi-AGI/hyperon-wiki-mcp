@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "open3"
+require "digest"
 require_relative "client"
 
 module Hyperon
@@ -1284,14 +1285,7 @@ module Hyperon
         # @example Get backup content
         #   backup_content = tools.download_database_backup
         def download_database_backup(save_path: nil)
-          response = client.get_raw("/admin/database/backup")
-
-          if save_path
-            File.write(save_path, response.body.to_s)
-            save_path
-          else
-            response.body.to_s
-          end
+          verify_and_save(client.get_raw("/admin/database/backup"), save_path)
         end
 
         # List available database backups (admin only)
@@ -1328,14 +1322,7 @@ module Hyperon
         #     save_path: "/tmp/backup.sql"
         #   )
         def download_database_backup_file(filename, save_path: nil)
-          response = client.get_raw("/admin/database/backup/download/#{filename}")
-
-          if save_path
-            File.write(save_path, response.body.to_s)
-            save_path
-          else
-            response.body.to_s
-          end
+          verify_and_save(client.get_raw("/admin/database/backup/download/#{filename}"), save_path)
         end
 
         # Delete database backup file (admin only)
@@ -1350,6 +1337,27 @@ module Hyperon
         #
         # @example
         #   tools.delete_database_backup("hyperon_wiki_backup_20251203_120000.sql")
+        # T8: save the backup verifying the server-provided SHA256 so "success"
+        # means the bytes actually landed. Binary-safe for gzip dumps.
+        def verify_and_save(response, save_path)
+          body = response.body.to_s
+          expected = response.headers["X-Backup-SHA256"]
+          actual = Digest::SHA256.hexdigest(body)
+          if expected && !expected.empty? && expected != actual
+            raise Client::APIError.new("Backup checksum mismatch (expected #{expected}, got #{actual})")
+          end
+
+          if save_path
+            File.binwrite(save_path, body)
+            if expected && !expected.empty? && Digest::SHA256.file(save_path).hexdigest != expected
+              raise Client::APIError.new("Saved backup failed checksum verification: #{save_path}")
+            end
+            save_path
+          else
+            body
+          end
+        end
+
         def delete_database_backup(filename)
           client.delete("/admin/database/backup/#{filename}")
         end
