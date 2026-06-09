@@ -29,10 +29,13 @@ module Hyperon
                 error_response(ErrorFormatter.authorization_error("read", "atomspace", api_message: e.message))
               rescue Client::ValidationError, Client::NotFoundError => e
                 error_response("AtomSpace read error: #{e.message}")
-              rescue Client::ServerError, Client::APIError, *TRANSPORT_ERRORS
-                # 5xx, exhausted-retry transport failures (the client wraps these as APIError),
-                # and raw socket errors. NARROW: schema / JSON / programming errors are NOT
-                # rescued and fail loud in tests (Codex Finding 2).
+              rescue Client::ServerError, *TRANSPORT_ERRORS
+                # Upstream 5xx + raw socket errors only. Deliberately NOT rescuing the
+                # Client::APIError base: the client also wraps JSON-parse failures and
+                # unexpected HTTP statuses as APIError, so catching it would mask schema/JSON
+                # defects as transient mirror outages (Codex). If the client wraps raw
+                # transport failures as a bare APIError, add a dedicated Client::TransportError
+                # (shared infra, coordinate with Chris) and rescue that here instead.
                 error_response("AtomSpace mirror service unavailable; retry shortly.")
               end
 

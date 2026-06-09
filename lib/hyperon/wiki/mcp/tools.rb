@@ -26,6 +26,52 @@ module Hyperon
           @client = client || Client.new
         end
 
+        # --- AtomSpace mirror read API (Lane C, Level 9) -------------------------------------
+        # Thin wrappers over the deck /api/mcp/atomspace_mirror/* endpoints. Gated server-side
+        # by the mcp:atomspace:read scope; nil params are dropped before the request.
+        def atomspace_query_atoms(pattern:, limit: nil, include_trash: false, wait_for_event_id: nil)
+          client.get("/atomspace_mirror/query_atoms",
+                     **{ pattern: pattern, limit: limit, include_trash: include_trash,
+                         wait_for_event_id: wait_for_event_id }.compact)
+        end
+
+        def atomspace_get_card_atom(card_id:, include_trash: false, wait_for_event_id: nil)
+          client.get("/atomspace_mirror/get_card_atom",
+                     **{ card_id: card_id, include_trash: include_trash,
+                         wait_for_event_id: wait_for_event_id }.compact)
+        end
+
+        def atomspace_get_card_provenance(card_id: nil, event_id: nil, action_id_range: nil, wait_for_event_id: nil)
+          client.get("/atomspace_mirror/get_card_provenance",
+                     **{ card_id: card_id, event_id: event_id, action_id_range: action_id_range,
+                         wait_for_event_id: wait_for_event_id }.compact)
+        end
+
+        def atomspace_list_references(card_id:, ref_type: nil, include_trash: false, wait_for_event_id: nil)
+          client.get("/atomspace_mirror/list_references",
+                     **{ card_id: card_id, ref_type: ref_type, include_trash: include_trash,
+                         wait_for_event_id: wait_for_event_id }.compact)
+        end
+
+        def atomspace_list_atoms_by_type(type_name:, limit: nil, include_trash: false, wait_for_event_id: nil)
+          client.get("/atomspace_mirror/list_atoms_by_type",
+                     **{ type_name: type_name, limit: limit, include_trash: include_trash,
+                         wait_for_event_id: wait_for_event_id }.compact)
+        end
+
+        def atomspace_atom_types
+          client.get("/atomspace_mirror/atom_types")
+        end
+
+        def atomspace_atom_count_by_type
+          client.get("/atomspace_mirror/atom_count_by_type")
+        end
+
+        def atomspace_space_stats
+          client.get("/atomspace_mirror/space_stats")
+        end
+        # --- end AtomSpace mirror read API --------------------------------------------------
+
         # Get a single card by name
         #
         # Fetches a card with all its metadata, content, and optionally its children.
