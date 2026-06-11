@@ -35,15 +35,16 @@ module Hyperon
               rescue Client::ValidationError, Client::NotFoundError => e
                 error_response("AtomSpace read error: #{e.message}")
               rescue Client::APIError => e
-                # Client::ServerError (503) and plain APIError (e.g. 409) both arrive here. Surface
-                # the KNOWN structured Lane C terminal codes; RE-RAISE anything else (unexpected
-                # status, JSON-parse-wrapped failure, genuine upstream 5xx without our code) so
-                # JSON / schema / programming bugs fail loud (Codex Finding 1).
-                code = e.respond_to?(:details) && e.details.is_a?(Hash) ? e.details["error"] : nil
+                # ServerError (5xx) and bare APIError (e.g. 409) both arrive here. The deck puts its
+                # error code in the response's top-level "error", which the client exposes as
+                # e.error_code (NOT e.details, which is data["details"] and nil here). Surface the
+                # KNOWN Lane C terminal codes structurally; RE-RAISE anything else (unexpected status,
+                # JSON-parse-wrapped failure, genuine 5xx without our code) so JSON/schema/programming
+                # bugs fail loud (Codex).
+                code = e.respond_to?(:error_code) ? e.error_code : nil
                 raise unless KNOWN_READ_ERRORS.include?(code)
 
-                error_response(JSON.generate({ error: code, event_id: e.details["event_id"],
-                                               reason: e.details["reason"], _meta: e.details["_meta"] }.compact))
+                error_response(JSON.generate({ error: code, status: (e.respond_to?(:status) ? e.status : nil) }.compact))
               rescue *TRANSPORT_ERRORS
                 error_response("AtomSpace mirror service unavailable; retry shortly.")
               end
