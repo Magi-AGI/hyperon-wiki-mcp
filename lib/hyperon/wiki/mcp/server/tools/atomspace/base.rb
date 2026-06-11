@@ -23,19 +23,28 @@ module Hyperon
                 "mcp:atomspace:read"
               end
 
+              # Structured Lane C terminal responses the deck controller returns by design
+              # (L7/L9 contract): mirror_integrity (409), staleness_timeout / event_failed /
+              # atomspace_unavailable (503). These must surface to the agent as clean errors.
+              KNOWN_READ_ERRORS = %w[staleness_timeout event_failed mirror_integrity atomspace_unavailable].freeze
+
               def self.respond
                 ::MCP::Tool::Response.new([{ type: "text", text: JSON.generate(yield) }])
               rescue Client::AuthorizationError => e
                 error_response(ErrorFormatter.authorization_error("read", "atomspace", api_message: e.message))
               rescue Client::ValidationError, Client::NotFoundError => e
                 error_response("AtomSpace read error: #{e.message}")
-              rescue Client::ServerError, *TRANSPORT_ERRORS
-                # Upstream 5xx + raw socket errors only. Deliberately NOT rescuing the
-                # Client::APIError base: the client also wraps JSON-parse failures and
-                # unexpected HTTP statuses as APIError, so catching it would mask schema/JSON
-                # defects as transient mirror outages (Codex). If the client wraps raw
-                # transport failures as a bare APIError, add a dedicated Client::TransportError
-                # (shared infra, coordinate with Chris) and rescue that here instead.
+              rescue Client::APIError => e
+                # Client::ServerError (503) and plain APIError (e.g. 409) both arrive here. Surface
+                # the KNOWN structured Lane C terminal codes; RE-RAISE anything else (unexpected
+                # status, JSON-parse-wrapped failure, genuine upstream 5xx without our code) so
+                # JSON / schema / programming bugs fail loud (Codex Finding 1).
+                code = e.respond_to?(:details) && e.details.is_a?(Hash) ? e.details["error"] : nil
+                raise unless KNOWN_READ_ERRORS.include?(code)
+
+                error_response(JSON.generate({ error: code, event_id: e.details["event_id"],
+                                               reason: e.details["reason"], _meta: e.details["_meta"] }.compact))
+              rescue *TRANSPORT_ERRORS
                 error_response("AtomSpace mirror service unavailable; retry shortly.")
               end
 
