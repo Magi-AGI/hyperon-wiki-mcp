@@ -153,6 +153,29 @@ module Hyperon
           def oauth_enabled?
             token_issuer && credential_store && client_cards
           end
+
+          # Localhost bypass: requests directly addressed to 127.0.0.1 /
+          # localhost (same-box services). nginx-proxied external traffic
+          # preserves the original Host header so it is NOT treated as local.
+          def localhost_origin?(env)
+            host = env["HTTP_HOST"] || env["SERVER_NAME"] || ""
+            ["127.0.0.1", "127.0.0.1:3002", "localhost", "localhost:3002"].include?(host)
+          end
+
+          # A trusted same-box caller may use the default identity without an
+          # OAuth token, but ONLY if it both originates from localhost AND
+          # presents the shared secret in the X-MCP-Local header. If
+          # MCP_LOCAL_SECRET is unset the bypass is disabled entirely (fail
+          # closed), so neither an nginx Host misconfiguration nor a missing
+          # secret can reopen an unauthenticated path to the default identity.
+          def trusted_local_caller?(env)
+            return false unless localhost_origin?(env)
+
+            secret = ENV["MCP_LOCAL_SECRET"].to_s
+            return false if secret.empty?
+
+            Rack::Utils.secure_compare(secret, env["HTTP_X_MCP_LOCAL"].to_s)
+          end
         end
 
         def initialize
@@ -549,8 +572,12 @@ module Hyperon
             # Check Bearer token for per-user Tools
             per_user_tools = resolve_bearer_token(env)
 
-            # If auth required but no valid token, reject
-            if self.class.oauth_require_auth? && per_user_tools.nil? && self.class.oauth_enabled?
+            # Fail closed: a request without a valid per-user token is rejected
+            # unless it is a trusted same-box caller (localhost origin + shared
+            # secret). This is independent of OAUTH_REQUIRE_AUTH / oauth_enabled?
+            # so a missing or degraded OAuth stack can never widen external
+            # access to the default identity.
+            if per_user_tools.nil? && !self.class.trusted_local_caller?(env)
               issuer_url = self.class.oauth_issuer_url
               headers = add_mcp_headers({
                                           "Content-Type" => "application/json",
