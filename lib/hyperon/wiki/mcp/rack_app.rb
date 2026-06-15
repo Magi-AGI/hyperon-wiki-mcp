@@ -400,15 +400,8 @@ module Hyperon
           when "refresh_token"
             handle_refresh_token(params, headers, session_id)
           else
-            # Fallback: if no OAuth components or no grant_type, return public token
-            # This preserves backward compatibility for clients that don't send credentials
-            unless self.class.oauth_enabled?
-              return [200, headers, [JSON.generate({
-                                                     access_token: "public-access",
-                                                     token_type: "Bearer",
-                                                     expires_in: 31_536_000
-                                                   })]]
-            end
+            # Fail closed when OAuth is unavailable: never issue a public token.
+            return oauth_unavailable_response(headers) unless self.class.oauth_enabled?
 
             [400, headers, [JSON.generate({
                                             error: "unsupported_grant_type",
@@ -422,13 +415,8 @@ module Hyperon
           client_id = params["client_id"]
           client_secret = params["client_secret"]
 
-          unless self.class.oauth_enabled?
-            return [200, headers, [JSON.generate({
-                                                   access_token: "public-access",
-                                                   token_type: "Bearer",
-                                                   expires_in: 31_536_000
-                                                 })]]
-          end
+          # Fail closed when OAuth is unavailable: never issue a public token.
+          return oauth_unavailable_response(headers) unless self.class.oauth_enabled?
 
           # Rate limiting check
           if self.class.rate_limiter&.rate_limited?(client_id)
@@ -486,6 +474,17 @@ module Hyperon
 
           # Re-issue tokens using stored credentials
           issue_token_response(token_data, headers)
+        end
+
+        # Fail-closed response for token requests made when OAuth components are
+        # not initialized. The server previously issued a long-lived
+        # "public-access" Bearer token here; if OAuth ever failed to initialize
+        # that became an unauthenticated path to the default identity. Refuse now.
+        def oauth_unavailable_response(headers)
+          [503, headers, [JSON.generate({
+                                          error: "server_error",
+                                          error_description: "OAuth is not configured on this server"
+                                        })]]
         end
 
         # RFC 7009 - Token Revocation
