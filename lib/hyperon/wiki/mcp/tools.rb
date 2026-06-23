@@ -1687,13 +1687,14 @@ module Hyperon
       #     since: "2025-11-25",
       #     before: "2025-12-02"
       #   )
-      def get_recent_changes(days: 7, since: nil, before: nil, limit: 100, max_cards: 5000)
+      def get_recent_changes(days: 7, since: nil, before: nil, limit: 100, max_cards: 5000, return_total: false)
         since_time = since ? parse_time(since) : (Time.now - (days * 24 * 60 * 60))
         before_time = before ? parse_time(before) : Time.now
 
         all_cards = []
         offset = 0
         loop_count = 0
+        total_available = nil
         max_loops = [max_cards / [limit, 1].max + 1, 100].min
 
         loop do
@@ -1711,6 +1712,10 @@ module Hyperon
             offset: offset
           )
 
+          # Decko returns the true total match count (SQL COUNT) independent of
+          # the per-page limit; capture it so callers can report truncation.
+          total_available ||= result["total"]
+
           cards = result["cards"] || []
           break if cards.empty?
 
@@ -1727,7 +1732,16 @@ module Hyperon
         end
 
         # Sort by updated_at descending (most recent first)
-        all_cards.sort_by { |c| c["updated_at"] || "" }.reverse
+        sorted = all_cards.sort_by { |c| c["updated_at"] || "" }.reverse
+        return sorted unless return_total
+
+        total = total_available || sorted.size
+        {
+          "cards" => sorted,
+          "total" => total,
+          "fetched" => sorted.size,
+          "truncated" => total > sorted.size
+        }
       end
 
       # Scan git repositories for changes
@@ -1795,9 +1809,14 @@ module Hyperon
       #     title: "Weekly Work Summary 2025 12 09",
       #     executive_summary: "Focused on MCP API enhancements..."
       #   )
-      def format_weekly_summary(card_changes, repo_changes, title: nil, executive_summary: nil)
+      def format_weekly_summary(card_changes, repo_changes, title: nil, executive_summary: nil,
+                                card_total: nil, card_truncated: false)
         date_str = Time.now.strftime("%Y %m %d")
         title ||= "Weekly Work Summary #{date_str}"
+
+        # True number of card updates in the window (Decko SQL count); falls
+        # back to the fetched size when the caller didn't supply it.
+        total_card_updates = card_total || card_changes.size
 
         summary = []
         summary << "# #{title}\n\n"
@@ -1807,13 +1826,17 @@ module Hyperon
         if executive_summary
           summary << "#{executive_summary}\n\n"
         else
-          summary << "This week saw #{card_changes.size} card updates across the wiki"
+          summary << "This week saw #{total_card_updates} card updates across the wiki"
           summary << " and #{repo_changes.values.sum(&:size)} commits across #{repo_changes.size} repositories.\n\n"
         end
 
         # Wiki Card Updates
         if card_changes.any?
           summary << "## Wiki Card Updates\n\n"
+          if card_truncated
+            summary << "_Showing the #{card_changes.size} most recent of #{total_card_updates} " \
+                       "card updates this period. Re-run with a higher `card_limit` to include more._\n\n"
+          end
           summary << format_card_changes(card_changes)
           summary << "\n"
         end
@@ -1861,7 +1884,7 @@ module Hyperon
       #     executive_summary: "Focused on MCP API Phase 2.1 completion...",
       #     create_card: true  # Explicitly create the card
       #   )
-      def create_weekly_summary(base_path: nil, days: 7, date: nil, executive_summary: nil, parent: "Weekly Work Summaries", create_card: false, username: nil)
+      def create_weekly_summary(base_path: nil, days: 7, date: nil, executive_summary: nil, parent: "Weekly Work Summaries", create_card: false, username: nil, card_limit: 500)
         # Get username from Decko authentication if not provided
         username ||= client.username || "Unknown User"
 
@@ -1873,8 +1896,14 @@ module Hyperon
         # This matches the existing pattern used for previous summaries
         card_name = "#{parent}+Weekly Work Summary #{date_str} - #{username}"
 
-        # Fetch recent changes (capped at 500 to avoid memory bloat)
-        card_changes = get_recent_changes(days: days, max_cards: 500)
+        # Fetch recent changes. The displayed list is capped at card_limit
+        # (default 500) to avoid memory bloat, but we still surface the TRUE
+        # total (Decko's SQL count) + a truncation flag so the summary never
+        # silently undercounts; raise card_limit to include more.
+        recent = get_recent_changes(days: days, max_cards: card_limit, return_total: true)
+        card_changes = recent["cards"]
+        card_total = recent["total"]
+        card_truncated = recent["truncated"]
         repo_changes = scan_git_repos(base_path: base_path, days: days)
 
         # Format summary
@@ -1882,7 +1911,9 @@ module Hyperon
           card_changes,
           repo_changes,
           title: "Weekly Work Summary #{date_str} - #{username}",
-          executive_summary: executive_summary
+          executive_summary: executive_summary,
+          card_total: card_total,
+          card_truncated: card_truncated
         )
 
         # Return preview with metadata if not creating card
@@ -1894,6 +1925,9 @@ module Hyperon
             "parent" => parent,
             "date" => date_str,
             "username" => username,
+            "card_updates_total" => card_total,
+            "card_updates_shown" => card_changes.size,
+            "card_updates_truncated" => card_truncated,
             "content" => content,
             "toc_card" => "#{parent}+table-of-contents"
           }
