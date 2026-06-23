@@ -481,6 +481,17 @@ RSpec.describe Hyperon::Wiki::Mcp::Tools, "weekly summary" do
       # and the list section flags the truncation explicitly
       expect(result["content"]).to include("Showing the #{card_changes.size} most recent of 642")
     end
+
+    it "warns instead of silently reporting 0 repos when base_path is unreadable (T11)" do
+      allow(tools).to receive(:scan_git_repos).and_return({})
+
+      result = tools.create_weekly_summary(create_card: false, base_path: "/no/such/dir/xyz123")
+
+      expect(result["repo_scan_warning"]).to include("not readable")
+      expect(result["content"]).to include("Repository commit scan did not run")
+      expect(result["content"]).to include("**Note:**")
+      expect(result["content"]).to include("not readable by the MCP server")
+    end
   end
 
   describe "private helper methods" do
