@@ -1810,7 +1810,7 @@ module Hyperon
       #     executive_summary: "Focused on MCP API enhancements..."
       #   )
       def format_weekly_summary(card_changes, repo_changes, title: nil, executive_summary: nil,
-                                card_total: nil, card_truncated: false)
+                                card_total: nil, card_truncated: false, repo_warning: nil)
         date_str = Time.now.strftime("%Y %m %d")
         title ||= "Weekly Work Summary #{date_str}"
 
@@ -1827,7 +1827,11 @@ module Hyperon
           summary << "#{executive_summary}\n\n"
         else
           summary << "This week saw #{total_card_updates} card updates across the wiki"
-          summary << " and #{repo_changes.values.sum(&:size)} commits across #{repo_changes.size} repositories.\n\n"
+          if repo_warning
+            summary << ". (Repository commit scan did not run — see the note below.)\n\n"
+          else
+            summary << " and #{repo_changes.values.sum(&:size)} commits across #{repo_changes.size} repositories.\n\n"
+          end
         end
 
         # Wiki Card Updates
@@ -1846,6 +1850,9 @@ module Hyperon
           summary << "## Repository & Code Changes\n\n"
           summary << format_repo_changes(repo_changes)
           summary << "\n"
+        elsif repo_warning
+          summary << "## Repository & Code Changes\n\n"
+          summary << "**Note:** #{repo_warning}\n\n"
         end
 
         # Next Steps placeholder
@@ -1904,7 +1911,24 @@ module Hyperon
         card_changes = recent["cards"]
         card_total = recent["total"]
         card_truncated = recent["truncated"]
+
+        # T11: the git scan reads the filesystem of whichever machine runs the
+        # MCP server, so a local base_path only works from a LOCAL (stdio)
+        # client — not the hosted connector. Detect an unreadable base_path (or
+        # an empty result) and warn loudly instead of a silent "0 commits / 0
+        # repositories", which reads as "no engineering work happened".
+        effective_base = (base_path || ENV["WORKING_DIR"] || Dir.pwd).to_s
         repo_changes = scan_git_repos(base_path: base_path, days: days)
+        repo_warning =
+          if !File.directory?(effective_base.tr("\\", "/"))
+            "Repository scan skipped: base_path '#{effective_base}' is not readable by the MCP " \
+            "server. create_weekly_summary scans the filesystem of whichever machine runs the " \
+            "server, so a local path only works from a LOCAL (stdio) client, not the hosted " \
+            "connector. Run it from a local client or pass a base_path the server can see."
+          elsif repo_changes.empty?
+            "No git repositories with commits in the last #{days} days were found under " \
+            "'#{effective_base}'."
+          end
 
         # Format summary
         content = format_weekly_summary(
@@ -1913,7 +1937,8 @@ module Hyperon
           title: "Weekly Work Summary #{date_str} - #{username}",
           executive_summary: executive_summary,
           card_total: card_total,
-          card_truncated: card_truncated
+          card_truncated: card_truncated,
+          repo_warning: repo_warning
         )
 
         # Return preview with metadata if not creating card
@@ -1928,6 +1953,7 @@ module Hyperon
             "card_updates_total" => card_total,
             "card_updates_shown" => card_changes.size,
             "card_updates_truncated" => card_truncated,
+            "repo_scan_warning" => repo_warning,
             "content" => content,
             "toc_card" => "#{parent}+table-of-contents"
           }
