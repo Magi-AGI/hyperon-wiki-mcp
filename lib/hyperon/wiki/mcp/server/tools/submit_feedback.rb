@@ -36,19 +36,28 @@ module Hyperon
               required: %w[category message]
             )
 
+            output_schema(
+              properties: {
+                status: { type: "string" },
+                text: { type: "string" },
+                metadata: { type: "object" }
+              }
+            )
+
             class << self
               def call(category:, message:, tool_name: nil, server_context:)
                 tools = server_context[:magi_tools]
                 tools.submit_feedback(category: category, message: message, tool_name: tool_name)
 
+                feedback_result = {
+                  status: "success",
+                  text: "Feedback submitted. Thank you for helping improve the MCP tools.",
+                  metadata: { category: category, tool_name: tool_name }.compact
+                }
                 ::MCP::Tool::Response.new([{
                   type: "text",
-                  text: JSON.generate({
-                    status: "success",
-                    text: "Feedback submitted. Thank you for helping improve the MCP tools.",
-                    metadata: { category: category, tool_name: tool_name }.compact
-                  })
-                }])
+                  text: JSON.generate(feedback_result)
+                }], structured_content: feedback_result)
               rescue StandardError => e
                 ::MCP::Tool::Response.new([{
                   type: "text",

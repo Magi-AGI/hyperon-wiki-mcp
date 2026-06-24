@@ -39,6 +39,12 @@ module Hyperon
               required: %w[operation type_name]
             )
 
+            output_schema(
+              properties: {
+                text: { type: "string", description: "Rendered template / result" }
+              }
+            )
+
             class << self
               def call(operation:, type_name:, server_context:, content: nil)
                 tools = server_context[:magi_tools]
@@ -53,7 +59,7 @@ module Hyperon
                 ::MCP::Tool::Response.new([{
                                             type: "text",
                                             text: result
-                                          }])
+                                          }], structured_content: { "text" => result })
               rescue Client::AuthorizationError => e
                 ::MCP::Tool::Response.new([{
                                             type: "text",
