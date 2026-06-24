@@ -24,6 +24,14 @@ module Hyperon
                   default: true
                 }
               }
+            output_schema(
+              properties: {
+                id: { type: "string" },
+                title: { type: "string" },
+                status: { type: "string", description: "ok / degraded / down" },
+                text: { type: "string" },
+                metadata: { type: "object" }
+              }
             )
 
             class << self
@@ -42,7 +50,7 @@ module Hyperon
                 ::MCP::Tool::Response.new([{
                   type: "text",
                   text: JSON.generate(response)
-                }])
+                }], structured_content: response)
               rescue StandardError => e
                 ::MCP::Tool::Response.new([{
                   type: "text",

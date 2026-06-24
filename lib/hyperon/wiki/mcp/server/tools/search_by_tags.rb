@@ -37,7 +37,13 @@ module Hyperon
                   maximum: 100
                 }
               },
-              required: ["tags"]
+            output_schema(
+              properties: {
+                results: { type: "array", items: { type: "object" }, description: "Matching cards" },
+                total: { type: "integer" },
+                text: { type: "string" },
+                metadata: { type: "object" }
+              }
             )
 
             class << self
@@ -56,7 +62,7 @@ module Hyperon
                 ::MCP::Tool::Response.new([{
                   type: "text",
                   text: JSON.generate(response)
-                }])
+                }], structured_content: response)
               rescue StandardError => e
                 ::MCP::Tool::Response.new([{
                   type: "text",
