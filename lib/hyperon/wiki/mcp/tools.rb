@@ -1822,10 +1822,17 @@ module Hyperon
 
         repos = find_git_repos(base_path)
         changes = {}
+        # Git worktrees and submodules of the same repo share one object store,
+        # so the same commit can surface in more than one tree. Dedupe by commit
+        # hash (the first tree to report a commit keeps it) so totals are not
+        # inflated.
+        seen_hashes = {}
 
         repos.each do |repo_path|
           repo_name = File.basename(repo_path)
           commits = get_git_commits(repo_path, since: since_str)
+          commits = commits.reject { |c| seen_hashes[c["hash"]] }
+          commits.each { |c| seen_hashes[c["hash"]] = true }
 
           changes[repo_name] = commits unless commits.empty?
         end
@@ -2082,12 +2089,16 @@ module Hyperon
 
         return repos unless File.directory?(base_path)
 
-        # Check if base_path itself is a git repo
-        if File.directory?(File.join(base_path, ".git"))
+        # Check if base_path itself is a git repo. .git is a DIRECTORY for a
+        # normal clone but a FILE (a "gitdir:" pointer) for a worktree or
+        # submodule, so accept either.
+        if File.exist?(File.join(base_path, ".git"))
           repos << base_path
         end
 
-        # Find subdirectories with .git folders (search up to 3 levels deep)
+        # Find nested repos up to 3 levels deep. The glob matches a ".git"
+        # entry whether it is a directory (normal clone) or a file (worktree /
+        # submodule), so all are discovered.
         [1, 2, 3].each do |depth|
           pattern = File.join(base_path, *Array.new(depth, "*"), ".git")
           Dir.glob(pattern).each do |git_dir|
