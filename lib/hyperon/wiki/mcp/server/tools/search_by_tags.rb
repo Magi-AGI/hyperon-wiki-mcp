@@ -37,6 +37,9 @@ module Hyperon
                   maximum: 100
                 }
               },
+              required: ["tags"]
+            )
+
             output_schema(
               properties: {
                 results: { type: "array", items: { type: "object" }, description: "Matching cards" },
