@@ -211,6 +211,30 @@ RSpec.describe Hyperon::Wiki::Mcp::Tools, "weekly summary" do
       expect(result.size).to eq(1)
       expect(result.first["hash"]).to eq("abc123")
     end
+
+    it "dedupes commits shared across worktrees/submodules by hash (T12)" do
+      shared = [{ "hash" => "dup1", "author" => "Dev", "date" => "2025-12-03", "subject" => "Shared commit" }]
+      allow(tools).to receive(:find_git_repos).and_return(["/tmp/wt-a", "/tmp/wt-b"])
+      allow(tools).to receive(:get_git_commits).and_return(shared)
+
+      result = tools.scan_git_repos(base_path: Dir.tmpdir)
+
+      # Same commit hash surfaces in both trees; it must be counted once.
+      expect(result.values.flatten.size).to eq(1)
+      expect(result.size).to eq(1) # the second tree deduped to empty -> excluded
+    end
+
+    it "discovers a worktree/submodule whose .git is a FILE, not a dir (T12)" do
+      base = File.join(Dir.tmpdir, "t12-base-#{rand(100_000)}")
+      wt = File.join(base, "a-worktree")
+      FileUtils.mkdir_p(wt)
+      File.write(File.join(wt, ".git"), "gitdir: /somewhere/.git/worktrees/a-worktree\n")
+
+      repos = tools.send(:find_git_repos, base)
+      expect(repos).to include(wt)
+    ensure
+      FileUtils.rm_rf(base) if base && File.exist?(base)
+    end
   end
 
   describe "#format_weekly_summary" do
