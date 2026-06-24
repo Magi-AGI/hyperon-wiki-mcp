@@ -28,6 +28,21 @@ module Hyperon
               }
             )
 
+            # Advertised in tools/list so agents can anticipate the response shape.
+            output_schema(
+              properties: {
+                id: { type: "string" },
+                title: { type: "string" },
+                results: {
+                  type: "array",
+                  description: "Available card types",
+                  items: { type: "object", properties: { id: { type: "string" }, title: { type: "string" } } }
+                },
+                total: { type: "integer" },
+                text: { type: "string" }
+              }
+            )
+
             class << self
               def call(limit: 100, server_context:)
                 tools = server_context[:magi_tools]
@@ -40,7 +55,7 @@ module Hyperon
                 ::MCP::Tool::Response.new([{
                   type: "text",
                   text: JSON.generate(response)
-                }])
+                }], structured_content: response)
               rescue StandardError => e
                 ::MCP::Tool::Response.new([{
                   type: "text",

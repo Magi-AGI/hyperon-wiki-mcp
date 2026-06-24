@@ -31,6 +31,33 @@ module Hyperon
               required: ["card_name", "relationship_type"]
             )
 
+            # Advertised in tools/list so agents can anticipate the response shape.
+            output_schema(
+              properties: {
+                id: { type: "string" },
+                title: { type: "string" },
+                source: { type: "string" },
+                url: { type: "string" },
+                results: {
+                  type: "array",
+                  description: "Related cards",
+                  items: {
+                    type: "object",
+                    properties: {
+                      id: { type: "string" },
+                      title: { type: "string" },
+                      snippet: { type: "string" },
+                      source: { type: "string" },
+                      url: { type: "string" }
+                    }
+                  }
+                },
+                total: { type: "integer" },
+                text: { type: "string" },
+                metadata: { type: "object", description: "relationship_type" }
+              }
+            )
+
             class << self
               def call(card_name:, relationship_type:, server_context:)
                 tools = server_context[:magi_tools]
@@ -54,7 +81,7 @@ module Hyperon
                 ::MCP::Tool::Response.new([{
                   type: "text",
                   text: JSON.generate(response)
-                }])
+                }], structured_content: response)
               rescue Client::NotFoundError => e
                 ::MCP::Tool::Response.new([{
                   type: "text",
