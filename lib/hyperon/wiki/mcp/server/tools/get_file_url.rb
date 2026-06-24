@@ -29,7 +29,13 @@ module Hyperon
                   enum: %w[icon small medium large original]
                 }
               },
-              required: ["name"]
+            output_schema(
+              properties: {
+                id: { type: "string" },
+                title: { type: "string" },
+                text: { type: "string", description: "File URL(s) / details" },
+                metadata: { type: "object" }
+              }
             )
 
             class << self
@@ -41,7 +47,7 @@ module Hyperon
                 ::MCP::Tool::Response.new([{
                   type: "text",
                   text: JSON.generate(response)
-                }])
+                }], structured_content: response)
               rescue Client::NotFoundError
                 ::MCP::Tool::Response.new([{
                   type: "text",

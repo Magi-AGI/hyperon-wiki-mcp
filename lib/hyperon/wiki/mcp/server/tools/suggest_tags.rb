@@ -38,6 +38,17 @@ module Hyperon
                   maximum: 20
                 }
               }
+            output_schema(
+              properties: {
+                id: { type: "string" },
+                title: { type: "string" },
+                source: { type: "string" },
+                url: { type: "string" },
+                results: { type: "array", items: { type: "object" }, description: "Suggested tags" },
+                total: { type: "integer" },
+                text: { type: "string" },
+                metadata: { type: "object" }
+              }
             )
 
             class << self
@@ -65,7 +76,7 @@ module Hyperon
                 ::MCP::Tool::Response.new([{
                   type: "text",
                   text: JSON.generate(response)
-                }])
+                }], structured_content: response)
               rescue Client::NotFoundError => e
                 ::MCP::Tool::Response.new([{
                   type: "text",
