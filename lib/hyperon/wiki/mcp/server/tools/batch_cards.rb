@@ -63,6 +63,24 @@ module Hyperon
               required: ["operations"]
             )
 
+            output_schema(
+              properties: {
+                id: { type: "string" },
+                title: { type: "string" },
+                status: { type: "string" },
+                mode: { type: "string" },
+                total: { type: "integer" },
+                successful: { type: "integer" },
+                failed: { type: "integer" },
+                results: { type: "array", items: { type: "object" } },
+                error: { type: %w[string null] },
+                source: { type: "string" },
+                url: { type: "string" },
+                text: { type: "string" },
+                metadata: { type: "object" }
+              }
+            )
+
             class << self
               def call(operations:, mode: "per_item", server_context:)
                 tools = server_context[:magi_tools]
@@ -80,7 +98,7 @@ module Hyperon
                 ::MCP::Tool::Response.new([{
                   type: "text",
                   text: JSON.generate(response)
-                }])
+                }], structured_content: response)
               rescue Client::ValidationError => e
                 ::MCP::Tool::Response.new([{
                   type: "text",
