@@ -35,6 +35,14 @@ module Hyperon
               required: ["operation"]
             )
 
+            output_schema(
+              properties: {
+                status: { type: "string" },
+                message: { type: "string" },
+                filename: { type: "string" }
+              }
+            )
+
             class << self
               def call(operation:, filename: nil, save_path: nil, server_context:)
                 tools = server_context[:magi_tools]
@@ -69,7 +77,7 @@ module Hyperon
                 ::MCP::Tool::Response.new([{
                   type: "text",
                   text: format_backup_result(operation, result)
-                }])
+                }], structured_content: result)
               rescue Client::AuthorizationError => e
                 ::MCP::Tool::Response.new([{
                   type: "text",

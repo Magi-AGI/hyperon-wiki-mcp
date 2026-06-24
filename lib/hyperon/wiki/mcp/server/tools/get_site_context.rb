@@ -21,6 +21,18 @@ module Hyperon
               properties: {}
             )
 
+            output_schema(
+              properties: {
+                wiki_name: { type: "string" },
+                wiki_url: { type: "string" },
+                description: { type: "string" },
+                hierarchy: { type: "object" },
+                guidelines: { type: "array" },
+                common_patterns: { type: "array" },
+                helpful_cards: { type: "array" }
+              }
+            )
+
             class << self
               def call(server_context:)
                 tools = server_context[:magi_tools]
@@ -30,7 +42,7 @@ module Hyperon
                 ::MCP::Tool::Response.new([{
                   type: "text",
                   text: format_context(context)
-                }])
+                }], structured_content: context)
               rescue StandardError => e
                 ::MCP::Tool::Response.new([{
                   type: "text",
