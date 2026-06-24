@@ -28,6 +28,12 @@ module Hyperon
               required: ["query"]
             )
 
+            output_schema(
+              properties: {
+                results: { type: "array", items: { type: "object", properties: { id: { type: "string" }, title: { type: "string" }, url: { type: "string" } } }, description: "Search results" }
+              }
+            )
+
             class << self
               def call(query:, server_context:)
                 tools = server_context[:magi_tools]
@@ -60,7 +66,7 @@ module Hyperon
                 ::MCP::Tool::Response.new([{
                   type: "text",
                   text: JSON.generate({ results: results })
-                }])
+                }], structured_content: { results: results })
               rescue Client::AuthenticationError => e
                 ::MCP::Tool::Response.new([{
                   type: "text",
