@@ -36,6 +36,21 @@ module Hyperon
               required: ["name", "new_name"]
             )
 
+            output_schema(
+              properties: {
+                id: { type: "string" },
+                title: { type: "string" },
+                old_name: { type: "string" },
+                new_name: { type: "string" },
+                status: { type: "string" },
+                updated_referers: { type: "integer" },
+                source: { type: "string" },
+                url: { type: "string" },
+                text: { type: "string" },
+                metadata: { type: "object" }
+              }
+            )
+
             class << self
               def call(name:, new_name:, update_referers: true, server_context:)
                 tools = server_context[:magi_tools]
@@ -48,7 +63,7 @@ module Hyperon
                 ::MCP::Tool::Response.new([{
                   type: "text",
                   text: JSON.generate(response)
-                }])
+                }], structured_content: response)
               rescue Client::NotFoundError => e
                 ::MCP::Tool::Response.new([{
                   type: "text",

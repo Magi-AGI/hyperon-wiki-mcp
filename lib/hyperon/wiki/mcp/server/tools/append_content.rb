@@ -36,6 +36,18 @@ module Hyperon
               required: %w[name content]
             )
 
+            output_schema(
+              properties: {
+                id: { type: "string" },
+                title: { type: "string" },
+                type: { type: "string" },
+                status: { type: "string" },
+                card_id: { type: "integer" },
+                text: { type: "string" },
+                metadata: { type: "object" }
+              }
+            )
+
             class << self
               def call(name:, content:, separator: "", server_context:)
                 tools = server_context[:magi_tools]
@@ -45,7 +57,7 @@ module Hyperon
                 ::MCP::Tool::Response.new([{
                   type: "text",
                   text: JSON.generate(response)
-                }])
+                }], structured_content: response)
               rescue Client::NotFoundError
                 ::MCP::Tool::Response.new([{
                   type: "text",
