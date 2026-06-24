@@ -57,6 +57,15 @@ module Hyperon
               required: ["card_name"]
             )
 
+            output_schema(
+              properties: {
+                scope: { type: "string" },
+                stats: { type: "object" },
+                suggestions: { type: "array", items: { type: "object" } },
+                preview: { type: "object" }
+              }
+            )
+
             class << self
               def call(card_name:, mode: "suggest", dry_run: true, scope: nil, min_term_length: 3, include_types: nil, server_context:)
                 tools = server_context[:magi_tools]
@@ -77,7 +86,7 @@ module Hyperon
                 ::MCP::Tool::Response.new([{
                   type: "text",
                   text: format_result(result, mode, dry_run)
-                }])
+                }], structured_content: result)
               rescue Client::AuthorizationError => e
                 ::MCP::Tool::Response.new([{
                   type: "text",

@@ -70,6 +70,14 @@ module Hyperon
               required: ["name"]
             )
 
+            output_schema(
+              properties: {
+                success: { type: "boolean" },
+                message: { type: "string" },
+                restored_from: { type: "string" }
+              }
+            )
+
             class << self
               def call(name:, act_id: nil, from_trash: false, server_context:)
                 tools = server_context[:magi_tools]
@@ -87,7 +95,7 @@ module Hyperon
                 ::MCP::Tool::Response.new([{
                   type: "text",
                   text: format_restore_result(result, from_trash)
-                }])
+                }], structured_content: result)
               rescue ArgumentError => e
                 ::MCP::Tool::Response.new([{
                   type: "text",
