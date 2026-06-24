@@ -37,6 +37,20 @@ module Hyperon
                     content: {
                       type: "string",
                       description: "Content search pattern (substring match)"
+                    },
+                    updated_at: {
+                      type: "array",
+                      items: { type: "string" },
+                      description: "Date filter on last-update time. Pass [op, date] where op is " \
+                                   '">=", ">", "<=", or "<" (e.g. [">=", "2026-06-01"]), or ' \
+                                   '["between", start, end]. Dates are ISO strings (date or datetime). ' \
+                                   "Note: >= / <= behave as on-or-after / on-or-before at day granularity."
+                    },
+                    created_at: {
+                      type: "array",
+                      items: { type: "string" },
+                      description: "Date filter on creation time. Same format as updated_at: " \
+                                   '[">=", "2026-06-01"] or ["between", start, end].'
                     }
                   }
                 },
