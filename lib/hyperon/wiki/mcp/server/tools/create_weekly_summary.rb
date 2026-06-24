@@ -49,6 +49,23 @@ module Hyperon
               }
             )
 
+            output_schema(
+              properties: {
+                preview: { type: "boolean" },
+                card_name: { type: "string" },
+                card_type: { type: "string" },
+                parent: { type: "string" },
+                date: { type: "string" },
+                username: { type: "string" },
+                card_updates_total: { type: "integer" },
+                card_updates_shown: { type: "integer" },
+                card_updates_truncated: { type: "boolean" },
+                repo_scan_warning: { type: %w[string null] },
+                content: { type: "string" },
+                toc_card: { type: "string" }
+              }
+            )
+
             class << self
               def call(base_path: nil, days: 7, date: nil, executive_summary: nil, username: nil, create_card: false, server_context:)
                 tools = server_context[:magi_tools]
@@ -72,13 +89,13 @@ module Hyperon
                   ::MCP::Tool::Response.new([{
                     type: "text",
                     text: format_created_card(result)
-                  }])
+                  }], structured_content: result)
                 else
                   # Result is a preview hash with metadata and instructions
                   ::MCP::Tool::Response.new([{
                     type: "text",
                     text: format_preview(result)
-                  }])
+                  }], structured_content: result)
                 end
               rescue StandardError => e
                 ::MCP::Tool::Response.new([{
