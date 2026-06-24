@@ -32,6 +32,18 @@ module Hyperon
               }
             )
 
+            output_schema(
+              properties: {
+                id: { type: "string" },
+                title: { type: "string" },
+                source: { type: "string" },
+                url: { type: "string" },
+                results: { type: "array", items: { type: "object", properties: { id: { type: "string" }, title: { type: "string" } } }, description: "Tags" },
+                total: { type: "integer" },
+                text: { type: "string" }
+              }
+            )
+
             class << self
               def call(card_name: nil, limit: 100, server_context:)
                 tools = server_context[:magi_tools]
@@ -42,14 +54,14 @@ module Hyperon
                   ::MCP::Tool::Response.new([{
                     type: "text",
                     text: JSON.generate(response)
-                  }])
+                  }], structured_content: response)
                 else
                   tags = tools.get_all_tags(limit: limit)
                   response = build_all_tags_response(tags)
                   ::MCP::Tool::Response.new([{
                     type: "text",
                     text: JSON.generate(response)
-                  }])
+                  }], structured_content: response)
                 end
               rescue Client::NotFoundError => e
                 ::MCP::Tool::Response.new([{
