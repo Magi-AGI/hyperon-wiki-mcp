@@ -47,6 +47,16 @@ module Hyperon
               required: ["terms_card", "results_card"]
             )
 
+            output_schema(
+              properties: {
+                status: { type: "string" },
+                scope: { type: "string" },
+                terms_checked: { type: "integer" },
+                matches: { type: "array", items: { type: "object" }, description: "Spoiler matches found" },
+                results_card: { type: "string" }
+              }
+            )
+
             class << self
               def call(terms_card:, results_card:, scope: "player", limit: 500, server_context:)
                 tools = server_context[:magi_tools]
@@ -63,7 +73,7 @@ module Hyperon
                 ::MCP::Tool::Response.new([{
                   type: "text",
                   text: format_scan_result(result)
-                }])
+                }], structured_content: result)
               rescue Client::AuthorizationError => e
                 ::MCP::Tool::Response.new([{
                   type: "text",

@@ -57,6 +57,17 @@ module Hyperon
               required: ["query"]
             )
 
+            output_schema(
+              properties: {
+                results: { type: "array", items: { type: "object" }, description: "Matching cards" },
+                total: { type: "integer" },
+                offset: { type: "integer" },
+                next_offset: { type: %w[integer null] },
+                limit: { type: "integer" },
+                text: { type: "string" }
+              }
+            )
+
             class << self
               def call(query:, limit: 20, offset: 0, server_context:)
                 tools = server_context[:magi_tools]
@@ -73,7 +84,7 @@ module Hyperon
                 ::MCP::Tool::Response.new([{
                   type: "text",
                   text: JSON.generate(response)
-                }])
+                }], structured_content: response)
               rescue Client::ValidationError => e
                 ::MCP::Tool::Response.new([{
                   type: "text",
