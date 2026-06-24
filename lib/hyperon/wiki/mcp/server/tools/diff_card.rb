@@ -65,6 +65,17 @@ module Hyperon
               required: ["name"]
             )
 
+            output_schema(
+              properties: {
+                id: { type: "string" },
+                title: { type: "string" },
+                source: { type: "string" },
+                url: { type: "string" },
+                text: { type: "string", description: "Unified diff between revisions" },
+                metadata: { type: "object" }
+              }
+            )
+
             class << self
               def call(name:, server_context:, from_revision: nil, to_revision: nil)
                 tools = server_context[:magi_tools]
@@ -80,7 +91,7 @@ module Hyperon
                 ::MCP::Tool::Response.new([{
                                             type: "text",
                                             text: JSON.generate(response)
-                                          }])
+                                          }], structured_content: response)
               rescue Client::NotFoundError
                 ::MCP::Tool::Response.new([{
                                             type: "text",

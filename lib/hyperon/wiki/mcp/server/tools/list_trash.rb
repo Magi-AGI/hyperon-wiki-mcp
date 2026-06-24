@@ -58,6 +58,13 @@ module Hyperon
               }
             )
 
+            output_schema(
+              properties: {
+                total: { type: "integer" },
+                cards: { type: "array", items: { type: "object" }, description: "Trashed cards" }
+              }
+            )
+
             class << self
               def call(limit: 50, offset: 0, server_context:)
                 tools = server_context[:magi_tools]
@@ -67,7 +74,7 @@ module Hyperon
                 ::MCP::Tool::Response.new([{
                   type: "text",
                   text: format_trash_list(trash, offset)
-                }])
+                }], structured_content: trash)
               rescue Client::AuthorizationError
                 ::MCP::Tool::Response.new([{
                   type: "text",
