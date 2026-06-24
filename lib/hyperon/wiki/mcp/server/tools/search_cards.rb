@@ -56,6 +56,30 @@ module Hyperon
               }
             )
 
+            # Advertised in tools/list so agents can anticipate the response shape.
+            output_schema(
+              properties: {
+                results: {
+                  type: "array",
+                  description: "Matching cards (most-relevant first)",
+                  items: {
+                    type: "object",
+                    properties: {
+                      id: { type: "string" },
+                      title: { type: "string" },
+                      snippet: { type: "string" },
+                      source: { type: "string" },
+                      url: { type: "string" }
+                    }
+                  }
+                },
+                total: { type: "integer", description: "Total matches (may exceed the returned count)" },
+                offset: { type: "integer" },
+                next_offset: { type: %w[integer null], description: "Offset for the next page, or null when done" },
+                text: { type: "string", description: "Human-readable rendering of the results" }
+              }
+            )
+
             class << self
               def call(query: nil, type: nil, search_in: nil, limit: 20, offset: 0, include_virtual: false, server_context:)
                 tools = server_context[:magi_tools]
@@ -81,7 +105,7 @@ module Hyperon
                 ::MCP::Tool::Response.new([{
                   type: "text",
                   text: JSON.generate(response)
-                }])
+                }], structured_content: response)
               rescue Client::AuthorizationError => e
                 ::MCP::Tool::Response.new([{
                   type: "text",
