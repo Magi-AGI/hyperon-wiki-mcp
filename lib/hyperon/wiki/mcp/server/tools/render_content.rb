@@ -42,6 +42,16 @@ module Hyperon
               required: ["content", "from_format", "to_format"]
             )
 
+            output_schema(
+              properties: {
+                id: { type: "string" },
+                title: { type: "string" },
+                converted_content: { type: "string" },
+                text: { type: "string" },
+                metadata: { type: "object" }
+              }
+            )
+
             class << self
               def call(content:, from_format:, to_format:, max_output_length: 8000, server_context:)
                 tools = server_context[:magi_tools]
@@ -58,7 +68,7 @@ module Hyperon
                 ::MCP::Tool::Response.new([{
                   type: "text",
                   text: JSON.generate(response)
-                }])
+                }], structured_content: response)
               rescue StandardError => e
                 ::MCP::Tool::Response.new([{
                   type: "text",
