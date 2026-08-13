@@ -7,6 +7,15 @@ require 'sinatra/base'
 require 'json'
 require_relative 'lib/hyperon/wiki/mcp'
 
+# SECURITY GATE -- see bin/mcp-server-http. This rackup config builds the same unauthenticated
+# Sinatra app and never loads the auth gate in lib/hyperon/wiki/mcp/rack_app.rb. Production and
+# dev run bin/mcp-server-rack-direct instead.
+unless ENV["MCP_ALLOW_UNAUTHENTICATED"] == "true"
+  abort "REFUSING TO START: config.ru performs no authentication. " \
+        "Use bin/mcp-server-rack-direct, or set MCP_ALLOW_UNAUTHENTICATED=true for a " \
+        "loopback-only host."
+end
+
 # Load all tool classes (same as bin/mcp-server-http)
 Dir[File.join(__dir__, 'lib/hyperon/wiki/mcp/server/tools/**/*.rb')].sort.each { |f| require f }
 

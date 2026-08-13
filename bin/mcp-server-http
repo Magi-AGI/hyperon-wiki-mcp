@@ -13,6 +13,26 @@ require "sinatra/base"
 require "json"
 require_relative "../lib/hyperon/wiki/mcp"
 
+# SECURITY GATE -- this entrypoint has NO authentication.
+#
+# It serves the full tool surface (including create/update/delete/rename and admin_backup) to
+# any caller that can reach the port, acting with the server's own Decko credentials. The auth
+# gate lives in lib/hyperon/wiki/mcp/rack_app.rb, which this Sinatra server never loads.
+#
+# Production and dev both run bin/mcp-server-rack-direct. This file is retained only for local
+# offline experimentation, and refuses to start unless that is stated explicitly.
+unless ENV["MCP_ALLOW_UNAUTHENTICATED"] == "true"
+  abort <<~MSG
+    REFUSING TO START: bin/mcp-server-http performs no authentication.
+
+    Anyone able to reach this port would get full read/write/admin access to the wiki.
+    Use bin/mcp-server-rack-direct (the auth-enforcing entrypoint) instead.
+
+    If you genuinely need this server on a loopback-only host, set:
+      MCP_ALLOW_UNAUTHENTICATED=true
+  MSG
+end
+
 # Load all MCP tool classes
 # Core card operations
 require_relative "../lib/hyperon/wiki/mcp/server/tools/get_card"

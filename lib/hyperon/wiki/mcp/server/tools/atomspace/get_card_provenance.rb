@@ -17,8 +17,7 @@ module Hyperon
                   event_id: { type: "string" },
                   action_id_range: { type: "string", description: "e.g. '1000-2000'" },
                   wait_for_event_id: { type: "string", description: "decko:action:<id> for read-your-writes" }
-                },
-                required: []
+                }
               )
               class << self
                 def call(card_id: nil, event_id: nil, action_id_range: nil, wait_for_event_id: nil, server_context:)
