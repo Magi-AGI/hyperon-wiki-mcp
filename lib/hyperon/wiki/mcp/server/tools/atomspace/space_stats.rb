@@ -12,7 +12,7 @@ module Hyperon
             class SpaceStats < Base
               description "AtomSpace mirror stats: atom counts, types, mirror-lag indicator (aggregate; requires mcp:atomspace:read)."
               annotations(read_only_hint: true, destructive_hint: false)
-              input_schema(properties: {}, required: [])
+              input_schema(properties: {})
               class << self
                 def call(server_context:)
                   respond { server_context[:magi_tools].atomspace_space_stats }

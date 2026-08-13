@@ -9,7 +9,11 @@ User=ubuntu
 WorkingDirectory=/home/ubuntu/hyperon-wiki-mcp
 Environment="RAILS_ENV=production"
 EnvironmentFile=/home/ubuntu/hyperon-wiki-mcp/.env.production
-ExecStart=/home/ubuntu/.rbenv/shims/ruby /home/ubuntu/hyperon-wiki-mcp/bin/mcp-server-http
+# MUST be mcp-server-rack-direct: it is the only entrypoint that enforces the auth gate
+# (lib/hyperon/wiki/mcp/rack_app.rb). bin/mcp-server-http and config.ru are legacy Sinatra
+# entrypoints with NO authentication at any commit -- pointing this unit at them exposes the
+# full tool surface, unauthenticated, to anyone who can reach the port.
+ExecStart=/home/ubuntu/.rbenv/shims/ruby /home/ubuntu/hyperon-wiki-mcp/bin/mcp-server-rack-direct
 Restart=always
 RestartSec=10
 StandardOutput=journal
