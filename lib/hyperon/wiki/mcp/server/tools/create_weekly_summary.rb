@@ -12,7 +12,7 @@ module Hyperon
             description "Generate a weekly summary preview combining wiki card changes and repository activity. Returns markdown for review by default. Set create_card=true to post directly to wiki."
 
             annotations(
-              read_only_hint: true,
+              read_only_hint: false,
               destructive_hint: true
             )
 

@@ -16,7 +16,7 @@ module Hyperon
             description "Perform bulk create/update operations on multiple cards in a single request. Supports partial failure handling - some operations may succeed while others fail."
 
             annotations(
-              read_only_hint: true,
+              read_only_hint: false,
               destructive_hint: true
             )
 

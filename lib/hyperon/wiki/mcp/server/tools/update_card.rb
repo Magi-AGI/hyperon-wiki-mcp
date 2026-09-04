@@ -14,8 +14,8 @@ module Hyperon
             Client = Hyperon::Wiki::Mcp::Client
             description "Update an existing card in the Hyperon Wiki. IMPORTANT: Do not change a card's type to a Published type — only humans promote drafts to published. Do not apply review tags like 'human_approved'. If making substantial AI-generated changes, ensure the card is tagged 'ai_generated' on its +tags subcard."
             annotations(
-              read_only_hint: true,
-              destructive_hint: false
+              read_only_hint: false,
+              destructive_hint: true
             )
 
             input_schema(

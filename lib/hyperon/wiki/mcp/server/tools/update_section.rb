@@ -14,7 +14,7 @@ module Hyperon
             description "Update content within a specific heading section of a card. Finds the section by heading text (case-insensitive match) and replaces its body content while preserving the heading. Use get_card_outline first to see available sections. The section body extends from after the heading to the next heading at the same or higher level."
             annotations(
               read_only_hint: false,
-              destructive_hint: false
+              destructive_hint: true
             )
 
             input_schema(

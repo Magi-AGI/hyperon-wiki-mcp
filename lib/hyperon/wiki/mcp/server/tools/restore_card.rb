@@ -46,7 +46,7 @@ module Hyperon
 
             annotations(
               read_only_hint: false,
-              destructive_hint: false # Restore is constructive, not destructive
+              destructive_hint: true # Restore overwrites the card's current content
             )
 
             input_schema(

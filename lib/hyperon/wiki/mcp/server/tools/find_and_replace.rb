@@ -14,7 +14,7 @@ module Hyperon
             description "Find and replace text in a card's raw stored content server-side, without fetching the card first. Supports first/last/all occurrence modes. Returns error if text not found. Use find_in_card first to locate the exact text with context, then use this tool to replace it. Much more efficient than get_card + update_card for targeted edits."
             annotations(
               read_only_hint: false,
-              destructive_hint: false
+              destructive_hint: true
             )
 
             input_schema(
