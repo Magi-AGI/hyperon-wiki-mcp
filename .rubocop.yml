@@ -1,3 +1,5 @@
+inherit_from: .rubocop_todo.yml
+
 AllCops:
   TargetRubyVersion: 3.2
   NewCops: enable
@@ -19,12 +21,20 @@ Style/Documentation:
   Enabled: false  # We have inline docs in key places, not every class
 
 # Metrics - reasonable limits
+# NOTE: inherit_mode merge keeps the .rubocop_todo.yml debt-ledger Exclude entries
+# instead of having these child Exclude lists replace them wholesale.
 Metrics/MethodLength:
+  inherit_mode:
+    merge:
+      - Exclude
   Max: 25
   Exclude:
     - 'spec/**/*'
 
 Metrics/BlockLength:
+  inherit_mode:
+    merge:
+      - Exclude
   Max: 25
   Exclude:
     - 'spec/**/*'
@@ -37,12 +47,23 @@ Metrics/ModuleLength:
   Max: 250
 
 Metrics/AbcSize:
+  inherit_mode:
+    merge:
+      - Exclude
   Max: 20
+  # lib/hyperon/wiki/mcp/auth.rb carries an inline `# rubocop:enable Metrics/AbcSize`,
+  # which re-enables this cop for that file even though .rubocop_todo.yml excludes it.
+  # Allowing the single offending method is narrower than raising Max globally.
+  AllowedMethods:
+    - fetch_jwks
   Exclude:
     - 'spec/**/*'
 
 # Layout preferences
 Layout/LineLength:
+  inherit_mode:
+    merge:
+      - Exclude
   Max: 120
   Exclude:
     - 'spec/**/*'
