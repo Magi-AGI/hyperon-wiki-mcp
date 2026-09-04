@@ -358,4 +358,141 @@ RSpec.describe Hyperon::Wiki::Mcp::Tools, "#update_section" do
       end)
     end
   end
+
+  # update_section is the only writer that already holds the full post-image before it
+  # PATCHes. The audit therefore has to run against `new_full_content` (what actually goes
+  # over the wire and becomes the merge leg), not against the replacement chunk alone --
+  # otherwise a marker sitting outside the edited section is silently re-written unrecorded.
+  describe "+proposal cards" do
+    let(:proposal_name) { "Team+proposal" }
+    let(:proposal_url) { "#{base_url}/cards/Team+proposal" }
+    let(:proposal_body) { "## Details\nOld detail text." }
+
+    before do
+      stub_request(:get, proposal_url)
+        .to_return(
+          status: 200,
+          body: { "name" => proposal_name, "content" => proposal_body, "type" => "Draft", "id" => 77 }.to_json,
+          headers: { "Content-Type" => "application/json" }
+        )
+      stub_request(:patch, proposal_url)
+        .to_return(status: 200, body: { "name" => proposal_name }.to_json)
+    end
+
+    context "when the pre-image carries a marker outside the edited section" do
+      let(:proposal_body) do
+        "Proposal mode: manual-review-packet\n\ncanary-zulu-do-not-log\n\n## Details\nOld detail text."
+      end
+
+      it "edits the section without requiring or objecting to the marker" do
+        expect do
+          tools.update_section(proposal_name, section: "Details", content: "New detail text.")
+        end.not_to raise_error
+
+        expect(WebMock).to have_requested(:patch, proposal_url)
+      end
+
+      it "records the marker the outgoing merge payload carries, not just the replacement chunk" do
+        expect do
+          tools.update_section(proposal_name, section: "Details", content: "New detail text.")
+        end.to output(/proposal_marker_line_in_merge_payload/).to_stderr
+
+        expect(WebMock).to have_requested(:patch, proposal_url)
+      end
+
+      it "labels the audit line as update_section" do
+        expect do
+          tools.update_section(proposal_name, section: "Details", content: "New detail text.")
+        end.to output(/"operation":"update_section"/).to_stderr
+      end
+
+      it "reports the pre-image marker count alongside the outgoing one" do
+        expect do
+          tools.update_section(proposal_name, section: "Details", content: "New detail text.")
+        end.to output(/"marker_lines":1.*"marker_lines_prior":1/).to_stderr
+      end
+
+      it "never logs the proposal body it audited" do
+        expect do
+          tools.update_section(proposal_name, section: "Details", content: "New detail text.")
+        end.not_to output(/canary-zulu-do-not-log/).to_stderr
+      end
+
+      it "never logs the matched marker line itself" do
+        expect do
+          tools.update_section(proposal_name, section: "Details", content: "New detail text.")
+        end.not_to output(/manual-review-packet/).to_stderr
+      end
+    end
+
+    context "when neither the pre-image nor the replacement carries a marker" do
+      it "stays silent" do
+        expect do
+          tools.update_section(proposal_name, section: "Details", content: "New detail text.")
+        end.not_to output.to_stderr
+      end
+    end
+
+    context "when the replacement introduces a marker" do
+      it "records a section body that writes a marker line into the merge payload" do
+        expect do
+          tools.update_section(proposal_name,
+                               section: "Details",
+                               content: "Proposal mode: full-replacement\nNew detail.")
+        end.to output(/proposal_marker_line_in_merge_payload/).to_stderr
+
+        expect(WebMock).to have_requested(:patch, proposal_url)
+      end
+
+      it "reports a pre-image count of zero" do
+        expect do
+          tools.update_section(proposal_name,
+                               section: "Details",
+                               content: "Proposal mode: full-replacement\nNew detail.")
+        end.to output(/"marker_lines_prior":0/).to_stderr
+      end
+
+      it "records a decorated marker line the same way" do
+        expect do
+          tools.update_section(proposal_name,
+                               section: "Details",
+                               content: "**Proposal mode:** diff\nNew detail.")
+        end.to output(/proposal_marker_line_in_merge_payload/).to_stderr
+      end
+    end
+
+    context "when the edit removes the only marker line" do
+      let(:proposal_body) { "## Details\nProposal mode: diff\nOld detail text." }
+
+      it "stays silent because the outgoing payload no longer carries one" do
+        expect do
+          tools.update_section(proposal_name, section: "Details", content: "New detail text.")
+        end.not_to output.to_stderr
+      end
+    end
+
+    context "when the card is not a +proposal card" do
+      let(:card_response) do
+        {
+          "name" => card_name,
+          "content" => "Proposal mode: diff\n\n## Details\nOld detail text.",
+          "type" => "RichText",
+          "id" => 42
+        }
+      end
+
+      before do
+        stub_request(:get, get_url)
+          .to_return(status: 200, body: card_response.to_json, headers: { "Content-Type" => "application/json" })
+        stub_request(:patch, patch_url)
+          .to_return(status: 200, body: { "name" => card_name }.to_json)
+      end
+
+      it "stays silent even though the outgoing payload carries a marker line" do
+        expect do
+          tools.update_section(card_name, section: "Details", content: "New detail text.")
+        end.not_to output.to_stderr
+      end
+    end
+  end
 end
