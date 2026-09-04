@@ -14,7 +14,7 @@ module Hyperon
             description "Create a file or image card from a remote URL. Downloads the file in the MCP server process (not blocking the wiki), then uploads it. Supports HTTP and HTTPS URLs with 10s connect / 30s read timeouts."
             annotations(
               read_only_hint: false,
-              destructive_hint: false
+              destructive_hint: true
             )
 
             input_schema(

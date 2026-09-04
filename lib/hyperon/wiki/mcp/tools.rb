@@ -2,6 +2,7 @@
 
 require "open3"
 require "digest"
+require "json"
 require_relative "client"
 
 module Hyperon
@@ -19,6 +20,37 @@ module Hyperon
       #   children = tools.list_children("Business Plan")
       class Tools
         attr_reader :client
+
+        # --- +proposal merge-payload safety --------------------------------------------
+        # Deployed WS6 verification (magi-hyperon, main @ 5e1e357, read-only): the merge
+        # workbench builds its payload as `proposal: card.db_content.to_s`, and nothing
+        # under mod/editorial_review parses or strips an in-body "Proposal mode:" line.
+        # The raw body of a "<Parent>+proposal" card IS the proposal leg of the 3-way
+        # merge, so every byte of it — marker lines and reviewer prose alike — is merge
+        # payload that can be written into the parent article when a human applies.
+        #
+        # These tools therefore do NOT require an in-body "Proposal mode:" marker:
+        # requiring one would force routing metadata into the merge payload, which is the
+        # very hazard the requirement was meant to prevent. They only emit a non-blocking
+        # audit line when a write would put such a line into that payload. The audit fires
+        # on the attempt, before the server confirms it, so an audited write that the deck
+        # then rejects still leaves a line on stderr.
+        PROPOSAL_NAME_SUFFIX_PATTERN = /\+proposal\z/i.freeze
+
+        # One unit of leading "decoration" that authors and HTML renderers put in front of
+        # a marker line: an HTML open/close tag (<p>, <li>, <strong class="x">), an ordered
+        # list bullet ("1.", "2)"), or markdown emphasis / quote / bullet / table
+        # punctuation. The HTML tag branch is the only one that contains letters, and it
+        # admits them only inside a complete `<...>` tag; no *bare* letter can precede the
+        # marker. That is what preserves the line-start anchor's real job below.
+        PROPOSAL_MARKER_DECORATION_PATTERN = %r{(?:</?[^<>]{1,60}>|\d{1,3}[.)]|[\s>*_~`\#|+\-\[\]()])}
+
+        # Matches a "Proposal mode:" marker at the start of a line, in the forms it is
+        # actually authored in: any case, optionally wrapped in the decoration above, and
+        # tolerant of extra whitespace around "mode" and the colon. Because decoration
+        # admits letters only inside complete HTML tags, never bare, prose that merely
+        # mentions the marker mid-sentence ("See Proposal mode: below") still cannot match.
+        PROPOSAL_MARKER_PREFIX_PATTERN = /\A#{PROPOSAL_MARKER_DECORATION_PATTERN}*Proposal\s+mode\s*:/i
 
         # Initialize tools with optional client
         #
@@ -296,6 +328,8 @@ module Hyperon
         # @example Compound card (child)
         #   child = tools.create_card("Parent+Child", content: "Child content")
         def create_card(name, content: nil, type: nil, **metadata)
+          warn_proposal_merge_payload(name, content, "create_card")
+
           payload = { name: name }
           payload[:content] = content if content
           payload[:type] = type if type
@@ -332,6 +366,8 @@ module Hyperon
 
           raise ArgumentError, "No update parameters provided" if payload.empty?
 
+          warn_proposal_merge_payload(name, content, "update_card") if content
+
           client.patch("/cards/#{encode_card_name(name)}", **payload)
         end
 
@@ -345,6 +381,8 @@ module Hyperon
         # @param separator [String] separator between existing and new content (default: "")
         # @return [Hash] updated card data
         def append_content(name, content:, separator: "")
+          warn_proposal_merge_payload(name, content, "append_content")
+
           client.patch("/cards/#{encode_card_name(name)}",
                        patch: { mode: "append", content: content, separator: separator })
         end
@@ -359,6 +397,8 @@ module Hyperon
         # @param separator [String] separator between new and existing content (default: "")
         # @return [Hash] updated card data
         def prepend_content(name, content:, separator: "")
+          warn_proposal_merge_payload(name, content, "prepend_content")
+
           client.patch("/cards/#{encode_card_name(name)}",
                        patch: { mode: "prepend", content: content, separator: separator })
         end
@@ -375,6 +415,8 @@ module Hyperon
         # @return [Hash] updated card data
         # @raise [Client::ValidationError] if text not found in card
         def find_and_replace(name, find:, replace:, occurrence: "first")
+          warn_proposal_merge_payload(name, replace, "find_and_replace")
+
           client.patch("/cards/#{encode_card_name(name)}",
                        patch: { mode: "find_replace", find: find, replace: replace, occurrence: occurrence })
         end
@@ -513,6 +555,12 @@ module Hyperon
           # Build new content: everything before section body + new content + everything after section
           heading_end = target[:heading_end]
           new_full_content = raw_content[0...heading_end] + "\n" + content.strip + "\n" + raw_content[section_end..]
+
+          # Audit the payload actually written, not the replacement chunk. This method
+          # PATCHes the whole rebuilt body, so a marker line anywhere outside the edited
+          # section is re-written into the merge payload by this call too. `raw_content`
+          # is the pre-image already fetched above, so the prior count is free.
+          warn_proposal_merge_payload(name, new_full_content, "update_section", prior_content: raw_content)
 
           client.patch("/cards/#{encode_card_name(name)}", content: new_full_content)
         end
@@ -889,6 +937,8 @@ module Hyperon
         def batch_operations(operations, mode: "per_item")
           valid_modes = %w[per_item transactional]
           raise ArgumentError, "Mode must be 'per_item' or 'transactional'" unless valid_modes.include?(mode)
+
+          audit_batch_proposal_ops(operations)
 
           payload = {
             ops: operations,
@@ -2062,6 +2112,99 @@ module Hyperon
         end
 
         headings.sort_by { |h| h[:position] }
+      end
+
+      # Whether a card name matches the +proposal naming convention.
+      #
+      # Case-insensitive, exact suffix — it deliberately does NOT match the workbench's
+      # own sidecars ("...+proposal+merge draft", "...+proposal+base"), whose bodies are
+      # not the merge leg. Accidental surrounding whitespace on the name is trimmed
+      # before matching so a stray leading/trailing space doesn't skip the audit.
+      #
+      # @param name [String, nil] the card name
+      # @return [Boolean]
+      def proposal_card_name?(name)
+        name.to_s.strip.match?(PROPOSAL_NAME_SUFFIX_PATTERN)
+      end
+
+      # Lines in `content` that begin with the "Proposal mode:" prefix, in any form —
+      # a resolved mode or the unresolved options template alike, in any case, and behind
+      # the markdown or HTML decoration authors actually wrap it in ("**Proposal mode:**",
+      # "> Proposal mode:", "<p>Proposal mode: …</p>" — the deployed wiki stores HTML
+      # bodies, so that last form is ordinary rather than exotic).
+      #
+      # The pattern still anchors on the start of a full line, and the decoration it
+      # allows ahead of the marker admits letters only inside complete HTML tags
+      # (`<p>`, `<strong>`), never as bare prose, so a sentence that merely mentions
+      # "Proposal mode" mid-line never matches. CRLF and surrounding whitespace are
+      # tolerated (each line is chomp'd and stripped before matching).
+      #
+      # @param content [String, nil] card content
+      # @return [Array<String>] each matching line, normalized (chomp'd + stripped)
+      def proposal_marker_lines(content)
+        content.to_s.lines.map { |line| line.chomp.strip }.grep(PROPOSAL_MARKER_PREFIX_PATTERN)
+      end
+
+      # Audit-only sweep over batch ops: records any create/update op that writes a
+      # "Proposal mode:" line into a +proposal card's merge payload. Never raises, so
+      # batch semantics (per_item / transactional) stay decided entirely upstream.
+      #
+      # @param operations [Array<Hash>] the batch operation specs
+      # @return [void]
+      def audit_batch_proposal_ops(operations)
+        operations.each_with_index do |op, idx|
+          next unless op.is_a?(Hash)
+          next unless %w[create update].include?((op[:action] || op["action"]).to_s)
+
+          warn_proposal_merge_payload(op[:name] || op["name"],
+                                      op[:content] || op["content"],
+                                      "batch_operations[#{idx}]")
+        end
+      end
+
+      # Audit-only notice for a write that contributes content to a +proposal card.
+      #
+      # Deliberately NEVER raises and never alters content. The deployed workbench gives
+      # us no marker semantics to enforce against — it merges the raw body — so blocking
+      # here would only guess at a convention the server does not implement. What this
+      # does record is the one fact deployed verification established: a "Proposal mode:"
+      # line written into a +proposal body is merge payload, and can be carried into the
+      # parent article when a human applies the merge.
+      #
+      # `content` must be whatever the caller is about to send. Callers that hold the full
+      # post-image (update_section) pass that; callers that send a server-side delta
+      # (append/prepend/find_and_replace) pass the delta, which is the most they know
+      # client-side. This runs before the request, so it records an *attempted* write —
+      # a line is emitted even if the deck then rejects the write.
+      #
+      # Logs operation/card/line-counts only — never the proposal body, the matched lines,
+      # an excerpt, or a digest of any of them.
+      #
+      # @param name [String, nil] the card name being written
+      # @param content [String, nil] the content this call is about to send for that card
+      # @param op_label [String] operation identifier used in the audit line
+      # @param prior_content [String, nil] the pre-image, when the caller already holds it;
+      #   reported as `marker_lines_prior` so a carried-over marker reads differently from
+      #   a newly introduced one. Omitted from the audit line when unknown.
+      # @return [void]
+      def warn_proposal_merge_payload(name, content, op_label, prior_content: nil)
+        return unless proposal_card_name?(name)
+
+        marker_lines = proposal_marker_lines(content).size
+        return if marker_lines.zero?
+
+        entry = {
+          event: "proposal_marker_line_in_merge_payload",
+          operation: op_label,
+          card: name.to_s.strip,
+          marker_lines: marker_lines
+        }
+        entry[:marker_lines_prior] = proposal_marker_lines(prior_content).size unless prior_content.nil?
+        entry[:detail] = "The deployed merge workbench does not parse or strip 'Proposal mode:'. " \
+                         "This line is part of the proposal's merge payload and can be written " \
+                         "into the parent card when the merge is applied."
+
+        warn(JSON.generate(entry))
       end
 
       # Parse time from various formats

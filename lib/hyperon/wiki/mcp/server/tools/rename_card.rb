@@ -13,7 +13,7 @@ module Hyperon
             description "Rename a card in the Hyperon Wiki (requires admin role). Best practice: after renaming, check if the parent card or a sibling card has a table of contents (TOC) and update the old name to the new name. TOCs are typically on the parent card itself or a sibling like Parent+table-of-contents."
 
             annotations(
-              read_only_hint: true,
+              read_only_hint: false,
               destructive_hint: true
             )
 

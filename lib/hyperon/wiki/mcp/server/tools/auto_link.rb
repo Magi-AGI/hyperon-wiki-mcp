@@ -17,7 +17,7 @@ module Hyperon
 
             annotations(
               read_only_hint: false,
-              destructive_hint: false
+              destructive_hint: true
             )
 
             input_schema(

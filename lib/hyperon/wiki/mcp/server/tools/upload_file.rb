@@ -14,7 +14,7 @@ module Hyperon
             description "Upload a file or image to create or update a File/Image card. Accepts base64-encoded file data. Use this to attach documents, images, or other files to wiki cards. The card is created if it doesn't exist, or updated if it does. For images, multiple size variants (icon, small, medium, large, original) are automatically generated. To reference an uploaded image in card content, use the inclusion syntax: {{CardName|size:medium}}"
             annotations(
               read_only_hint: false,
-              destructive_hint: false
+              destructive_hint: true
             )
 
             input_schema(

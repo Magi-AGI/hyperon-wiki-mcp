@@ -12,7 +12,7 @@ module Hyperon
             description "Manage database backups (admin only): download, list, or delete backups"
 
             annotations(
-              read_only_hint: true,
+              read_only_hint: false,
               destructive_hint: true
             )
 

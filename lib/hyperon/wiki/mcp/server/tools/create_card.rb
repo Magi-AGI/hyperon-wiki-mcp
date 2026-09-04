@@ -15,8 +15,8 @@ module Hyperon
             description "Create a new card in the Hyperon Wiki. IMPORTANT: Cards with substantive content written by AI MUST be created as draft card types (e.g., 'Draft Article', not 'Article' or 'Published'). Never create Published-type cards directly — those are converted from drafts after human review. Tag all AI-generated cards with 'ai_generated' on the +tags subcard. Never apply review tags like 'human_approved' — only humans do that. After creating, check if the parent or a sibling has a TOC and update it."
 
             annotations(
-              read_only_hint: true,
-              destructive_hint: true
+              read_only_hint: false,
+              destructive_hint: false
             )
 
             input_schema(
