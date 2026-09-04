@@ -502,9 +502,11 @@ RSpec.describe Hyperon::Wiki::Mcp::Tools, "new features" do
     let(:backup_content) { "-- SQL DUMP\nCREATE TABLE..." }
 
     before do
-      # Stub get_raw method to return a response with body
+      # Stub get_raw to mirror HTTP::Response: #body plus the #headers the
+      # server sends, including the X-Backup-SHA256 the tool verifies (T8).
       allow(client).to receive(:get_raw).with("/admin/database/backup")
-        .and_return(double("Response", body: backup_content))
+        .and_return(double("Response", body: backup_content,
+                                       headers: { "X-Backup-SHA256" => Digest::SHA256.hexdigest(backup_content) }))
     end
 
     it "downloads database backup to file" do
@@ -564,7 +566,8 @@ RSpec.describe Hyperon::Wiki::Mcp::Tools, "new features" do
 
     before do
       allow(client).to receive(:get_raw).with("/admin/database/backup/download/#{filename}")
-        .and_return(double("Response", body: backup_content))
+        .and_return(double("Response", body: backup_content,
+                                       headers: { "X-Backup-SHA256" => Digest::SHA256.hexdigest(backup_content) }))
     end
 
     it "downloads specific backup file" do
