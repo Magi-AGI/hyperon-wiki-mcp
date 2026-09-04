@@ -565,5 +565,4 @@ RSpec.describe "Full API Integration", :integration do
     end
   end
 
-
 end
