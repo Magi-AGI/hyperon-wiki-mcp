@@ -90,11 +90,30 @@ RSpec.describe Hyperon::Wiki::Mcp::RackApp do
   end
 
   describe "/mcp endpoint" do
+    # These examples cover transport/routing, not auth. The MCP message handler
+    # fails closed (see rack_app_auth_gate_spec.rb), so requests here identify
+    # as a trusted same-box caller: localhost Host (set by make_request) plus
+    # the X-MCP-Local shared secret.
+    let(:local_secret) { "test-local-secret" }
+
+    let(:local_headers) do
+      { "Content-Type" => "application/json", "X-MCP-Local" => local_secret }
+    end
+
+    around do |example|
+      orig_secret = ENV.fetch("MCP_LOCAL_SECRET", nil)
+      ENV["MCP_LOCAL_SECRET"] = local_secret
+      example.run
+      if orig_secret
+        ENV["MCP_LOCAL_SECRET"] = orig_secret
+      else
+        ENV.delete("MCP_LOCAL_SECRET")
+      end
+    end
+
     it "accepts MCP messages on POST /mcp" do
       body = JSON.generate({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} })
-      status, _, response_body = make_request("POST", "/mcp",
-                                              body: body,
-                                              headers: { "Content-Type" => "application/json" })
+      status, _, response_body = make_request("POST", "/mcp", body: body, headers: local_headers)
 
       expect(status).to eq(200)
       parsed = JSON.parse(response_body.first)
@@ -108,9 +127,7 @@ RSpec.describe Hyperon::Wiki::Mcp::RackApp do
 
     it "accepts MCP messages on POST /mcp/" do
       body = JSON.generate({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} })
-      status, = make_request("POST", "/mcp/",
-                             body: body,
-                             headers: { "Content-Type" => "application/json" })
+      status, = make_request("POST", "/mcp/", body: body, headers: local_headers)
 
       expect(status).to eq(200)
     end
