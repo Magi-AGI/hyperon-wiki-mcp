@@ -6,10 +6,10 @@
 # This file RECORDS current behavior; it does not assert desired behavior and it
 # must not drive a change to lib/.
 #
-# The boundary in one line: everything this client believes about *who* it is and
-# *what role* it holds is read out of the auth endpoint's HTTP response BODY. It
-# is never derived from the JWT it was handed, and it is never checked against
-# the role the client asked for.
+# The boundary in one line: the `username` and `resolved_role` that
+# Auth#fetch_token stores are read straight out of the auth endpoint's HTTP
+# response BODY. Neither is derived from the JWT that same response carried, and
+# neither is checked against the role the client asked for.
 #
 #   Config#auth_payload ---- POST /auth ---->  Decko
 #   (username/password                            |
@@ -19,7 +19,7 @@
 #                                                 |
 #                                                 | Auth#resolved_role
 #                                                 v
-#   RackApp#authenticate_with_decko  ->  role  ->  OAuth response `scope`
+#   RackApp#authenticate_with_decko  ->  that role, or "user" when it is nil
 #
 # Sources under characterization:
 #   lib/hyperon/wiki/mcp/auth.rb:39      attr_reader :username, :resolved_role
@@ -33,11 +33,13 @@
 #   * #verify_token claim handling, including the fact that it never reads or
 #     enforces a `scope` claim                       -> auth_verify_token_spec.rb
 #
-# "scope" appears at exactly one place in this flow, and it is downstream of
-# everything above: RackApp maps the *resolved role* onto an OAuth response
-# scope when issuing its own token. That mapping is separate from, and does not
-# feed, Auth#verify_token's JWT claim verification. Auth itself has no notion of
-# scope at all -- no payload field, no reader, no ivar.
+# On "scope": Auth extracts none. It has no payload field, no reader and no ivar
+# for one, even when the response body offers a `scope` -- whatever scope claim
+# the token itself carries stays sealed inside that opaque string. The one place
+# a scope is produced in this flow is downstream and separate:
+# RackApp#issue_token_response maps the role it is handed onto the scope of its
+# own OAuth token response. That mapping neither feeds nor is fed by
+# Auth#verify_token's JWT claim verification.
 
 require "spec_helper"
 require "webmock/rspec"
@@ -55,6 +57,19 @@ RSpec.describe "auth trust boundary" do
   let(:base_url) { "https://test.example.com/api/mcp" }
   let(:auth_url) { "https://test.example.com/api/mcp/auth" }
   let(:jwks_url) { "https://test.example.com/api/mcp/.well-known/jwks.json" }
+
+  # Examples below build Config straight off the process environment, so they
+  # write MCP_*/DECKO_API_BASE_URL directly. Snapshot every key this file touches
+  # and restore it afterwards: nothing here may leak into a neighboring example,
+  # in this file or anywhere else in a randomized full-suite run.
+  around do |example|
+    keys = %w[MCP_API_KEY MCP_USERNAME MCP_PASSWORD MCP_ROLE DECKO_API_BASE_URL]
+    saved = keys.to_h { |key| [key, ENV.fetch(key, nil)] }
+    keys.each { |key| ENV.delete(key) }
+    example.run
+  ensure
+    saved.each { |key, value| value.nil? ? ENV.delete(key) : ENV.store(key, value) }
+  end
 
   before do
     WebMock.disable_net_connect!(allow_localhost: false)
@@ -140,8 +155,7 @@ RSpec.describe "auth trust boundary" do
 
         expect(config.role).to eq("user")
         expect(auth.resolved_role).to eq("admin")
-        expect(WebMock).to have_requested(:post, auth_url)
-          .with { |req| JSON.parse(req.body)["role"] == "user" }
+        expect(WebMock).to(have_requested(:post, auth_url).with { |req| JSON.parse(req.body)["role"] == "user" })
       end
 
       it "takes resolved_role from the response body even when the token disagrees" do
@@ -191,6 +205,18 @@ RSpec.describe "auth trust boundary" do
         expect(auth.username).to be_nil
       end
 
+      it "stores the username the response body reports, not the one it signed in with" do
+        ENV["MCP_USERNAME"] = "player@example.com"
+        ENV["MCP_PASSWORD"] = "s3cret"
+        ENV["DECKO_API_BASE_URL"] = base_url
+        stub_auth({ "token" => player_token, "username" => "decko_account", "role" => "user" })
+
+        password_auth = described_class.new(Hyperon::Wiki::Mcp::Config.new)
+        password_auth.token
+
+        expect(password_auth.username).to eq("decko_account")
+      end
+
       it "drops the stored identity on clear_cache!" do
         stub_auth({ "token" => player_token, "username" => "decko_account", "role" => "admin" })
         auth.token
@@ -214,11 +240,11 @@ RSpec.describe "auth trust boundary" do
         auth.token
 
         expect(auth).not_to respond_to(:scope)
-        expect(auth.instance_variables).not_to include(:@scope)
+        expect(auth).not_to respond_to(:scopes)
         expect(auth.resolved_role).to eq("gm")
       end
 
-      it "keeps no scope state of any kind after a successful fetch" do
+      it "extracts no scope state, though the token it stored carries a scope claim" do
         stub_auth({
                     "token" => player_token,
                     "username" => "decko_account",
@@ -228,16 +254,15 @@ RSpec.describe "auth trust boundary" do
 
         auth.token
 
-        # The complete set of state fetch_token can populate. Nothing scope-shaped.
-        expect(auth.instance_variables).to contain_exactly(
-          :@config, :@token, :@token_expires_at, :@username, :@resolved_role,
-          :@jwks_cache, :@jwks_cached_at
-        )
+        # The claim survives inside the opaque token string. What is absent is any
+        # separately extracted scope state for this client to read or act on.
+        expect(claims_in(auth.token)).to include("scope" => ["cards:read"])
+        expect(auth.instance_variables).not_to include(:@scope, :@scopes)
       end
 
       it "exposes no scope reader on the class" do
         expect(described_class.public_instance_methods).to include(:username, :resolved_role)
-        expect(described_class.public_instance_methods).not_to include(:scope)
+        expect(described_class.public_instance_methods).not_to include(:scope, :scopes)
       end
     end
   end
@@ -287,8 +312,8 @@ RSpec.describe "auth trust boundary" do
 
       Hyperon::Wiki::Mcp::Auth.new(described_class.new).token
 
-      expect(WebMock).to have_requested(:post, auth_url)
-        .with { |req| JSON.parse(req.body) == { "api_key" => "test-api-key", "role" => "user" } }
+      expected_body = { "api_key" => "test-api-key", "role" => "user" }
+      expect(WebMock).to(have_requested(:post, auth_url).with { |req| JSON.parse(req.body) == expected_body })
     end
   end
 
@@ -347,6 +372,16 @@ RSpec.describe "auth trust boundary" do
         expect(app.send(:authenticate_with_decko, email, password)).to eq("shepherd")
       end
 
+      it "applies that \"user\" fallback on Ruby falsiness: a blank role survives, false does not" do
+        # `resolved_role || "user"`: an empty string is truthy and is returned as
+        # is, while a JSON `"role": false` is swallowed by the same fallback nil takes.
+        stub_tools(resolved_role: "")
+        expect(app.send(:authenticate_with_decko, email, password)).to eq("")
+
+        stub_tools(resolved_role: false)
+        expect(app.send(:authenticate_with_decko, email, password)).to eq("user")
+      end
+
       context "when it returns nil" do
         it "rejects blank credentials without contacting Decko" do
           allow(app).to receive(:create_user_tools)
@@ -380,15 +415,20 @@ RSpec.describe "auth trust boundary" do
       end
     end
 
-    # Downstream of the boundary above, and separate from Auth#verify_token: the
-    # role that came out of the /auth response body is what RackApp maps onto the
-    # `scope` it reports in its own OAuth token response. No JWT claim is
-    # consulted to produce it.
-    describe "role to OAuth response scope (downstream)" do
+    # Downstream of the boundary above, and separate from Auth#verify_token:
+    # issue_token_response maps whatever role it is handed onto the `scope` it
+    # reports in its own OAuth token response. These examples hand that role in
+    # directly, so they characterize the mapping alone -- not how the role was
+    # obtained. #authenticate_with_decko above is what supplies it in production.
+    # Either way no JWT claim is consulted to produce the scope.
+    describe "#issue_token_response role to OAuth response scope (downstream)" do
+      # RackApp's issuer and store are class-level, so restore them from an
+      # ensure for the same reason the ENV hook above uses one.
       around do |example|
         prior_issuer = described_class.token_issuer
         prior_store = described_class.credential_store
         example.run
+      ensure
         described_class.token_issuer = prior_issuer
         described_class.credential_store = prior_store
       end
@@ -401,7 +441,10 @@ RSpec.describe "auth trust boundary" do
           Hyperon::Wiki::Mcp::OAuth::CredentialStore,
           store_refresh_token: nil, store_session: nil
         )
-        stub_tools(resolved_role: "admin")
+        # issue_token_response builds a Tools instance to cache on the session.
+        # Stub it so nothing real is constructed; no example here reads it back,
+        # and in particular no Auth of any kind supplies the role under test.
+        allow(app).to receive(:create_user_tools).and_return(instance_double(Hyperon::Wiki::Mcp::Tools))
       end
 
       def scope_for(role)
@@ -420,7 +463,7 @@ RSpec.describe "auth trust boundary" do
         "shepherd" => "mcp:read",
         nil => "mcp:read"
       }.each do |role, scope|
-        it "maps a resolved role of #{role.inspect} to #{scope.inspect}" do
+        it "maps a supplied role of #{role.inspect} to #{scope.inspect}" do
           expect(scope_for(role)).to eq(scope)
         end
       end
