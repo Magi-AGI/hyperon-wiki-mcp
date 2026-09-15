@@ -139,6 +139,43 @@ module Hyperon
           raise VerificationError, "Token verification failed: #{e.message}"
         end
 
+        # Scopes carried by the current token, read from a VERIFIED payload.
+        #
+        # A scope is an authorization input, so it is deliberately NOT read from
+        # the auth response body and never from an unverified decode -- either
+        # would let a caller self-assert a grant. The claim is decided and signed
+        # deck-side (POLICY REV4); this only reads what the signature covers.
+        #
+        # Stateless: it verifies on demand rather than caching at fetch time, so
+        # there is no @scopes ivar for #clear_cache! or #refresh_token! to reason
+        # about. That only rules out staleness from an internal cache -- it does
+        # not guarantee the scopes returned here still match whatever token a
+        # caller sends outbound afterward; #refresh_token! or a concurrent caller
+        # can still rotate the token between this call and that later use.
+        #
+        # Both the array shape and the space-delimited string shape the deck emits
+        # are recognized. Anything that is neither an array nor a string yields no
+        # scopes rather than a guess, and a token that fails verification also
+        # yields no scopes rather than propagating the error -- both fail closed.
+        #
+        # @return [Array] scopes from the verified token, or [] when the claim is
+        #   absent, is neither an array nor a string, or the token fails
+        #   verification
+        def scopes
+          claim = verify_token(token)["scope"]
+
+          case claim
+          when Array
+            claim
+          when String
+            claim.split
+          else
+            []
+          end
+        rescue VerificationError, JWKSError
+          []
+        end
+
         # Force token refresh
         #
         # @return [String] the new token
