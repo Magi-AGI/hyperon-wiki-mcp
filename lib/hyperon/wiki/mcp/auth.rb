@@ -211,20 +211,27 @@ module Hyperon
         end
 
         # Convert JWK hash to OpenSSL public key
+        #
+        # Builds a PKCS#1 RSAPublicKey DER from the JWK's modulus and exponent and
+        # lets OpenSSL parse it. The previous construction -- allocate an empty
+        # OpenSSL::PKey::RSA and populate it with #set_key -- raises on OpenSSL 3.x
+        # ("rsa#set_key= is incompatible with OpenSSL 3.0"), where pkeys are
+        # immutable after allocation, so no token could reach signature
+        # verification at all. Parsing a DER is the supported route and works on
+        # both OpenSSL 1.1 and 3.x.
         def jwk_to_public_key(jwk)
           # Extract modulus (n) and exponent (e) from JWK
           n = decode_base64url(jwk["n"])
           e = decode_base64url(jwk["e"])
 
-          # Create RSA public key
-          key = OpenSSL::PKey::RSA.new
-          key.set_key(
-            OpenSSL::BN.new(n, 2),
-            OpenSSL::BN.new(e, 2),
-            nil
-          )
+          der = OpenSSL::ASN1::Sequence.new(
+            [
+              OpenSSL::ASN1::Integer.new(OpenSSL::BN.new(n, 2)),
+              OpenSSL::ASN1::Integer.new(OpenSSL::BN.new(e, 2))
+            ]
+          ).to_der
 
-          key
+          OpenSSL::PKey::RSA.new(der)
         end
 
         # Decode base64url-encoded string to binary
