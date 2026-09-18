@@ -36,13 +36,32 @@
 # hand (see #rs256_token) and sign it for real with the synthetic RSA key. The
 # method under test is never bypassed.
 #
-# OpenSSL blocker: #jwk_to_public_key builds the RSA key with
-# OpenSSL::PKey::RSA#set_key, which raises on OpenSSL 3.x ("pkeys are immutable
-# on OpenSSL 3.0"). On such a runtime NO token can reach step 6 at all. That is
-# characterized directly below; the claim/signature semantics of step 6 are
-# characterized in a clearly-labelled context that bridges the import seam with
-# the equivalent public key, so those recordings hold on either OpenSSL
-# generation.
+# Former OpenSSL blocker, resolved in S4. #jwk_to_public_key used to build the
+# RSA key by allocating an empty OpenSSL::PKey::RSA and populating it with
+# #set_key, which raises on OpenSSL 3.x -- on such a runtime NO token reached
+# step 6 at all. It now builds a PKCS#1 RSAPublicKey DER and lets OpenSSL parse
+# it, which works on both OpenSSL generations.
+#
+# Three pieces of machinery existed only to work around that blocker and have
+# been removed, deliberately rather than by attrition:
+#   * the AUTH_VERIFY_TOKEN_JWK_IMPORT_ERROR probe, which ran its OWN copy of the
+#     old set_key construction instead of calling the method under test. A repair
+#     could not change what the probe reported, so it would have kept selecting
+#     the import-error branch.
+#   * the two conditionals keyed on that probe. Their import-error expectations
+#     would NOT have passed silently against a repaired method -- verify_token
+#     returns a payload instead of raising, so `raise_error` fails. They were
+#     unusable as a GREEN acceptance mechanism for the opposite reason: they fail
+#     noisily until someone replaces them by hand. Replacing them explicitly was
+#     therefore part of S4, not an afterthought, and a repair could never have
+#     been accepted by letting a branch "flip" on its own.
+#   * the context that bridged the import seam by stubbing #jwk_to_public_key.
+#     Its signature, algorithm, issuer, expiry and scope recordings now run
+#     through the real importer instead, so they assert the shipped pipeline
+#     rather than a stand-in.
+#
+# Everything else in this file still RECORDS current behavior and must not drive
+# a change to lib/.
 
 require "spec_helper"
 require "webmock/rspec"
@@ -57,20 +76,6 @@ require "hyperon/wiki/mcp/auth"
 # to disk and never shared with any endpoint.
 AUTH_VERIFY_TOKEN_SIGNING_KEY = OpenSSL::PKey::RSA.generate(2048)
 AUTH_VERIFY_TOKEN_OTHER_KEY = OpenSSL::PKey::RSA.generate(2048)
-
-# Probe of the exact import sequence #jwk_to_public_key performs. nil when this
-# runtime allows the import; otherwise the error object the runtime raises.
-AUTH_VERIFY_TOKEN_JWK_IMPORT_ERROR = begin
-  probe = OpenSSL::PKey::RSA.new
-  probe.set_key(
-    OpenSSL::BN.new(AUTH_VERIFY_TOKEN_SIGNING_KEY.n.to_s(2), 2),
-    OpenSSL::BN.new(AUTH_VERIFY_TOKEN_SIGNING_KEY.e.to_s(2), 2),
-    nil
-  )
-  nil
-rescue StandardError => e
-  e
-end
 
 RSpec.describe Hyperon::Wiki::Mcp::Auth do
   let(:expected_issuer) { "test-issuer" }
@@ -271,14 +276,7 @@ RSpec.describe Hyperon::Wiki::Mcp::Auth do
                 ))
           .and_call_original
 
-        if AUTH_VERIFY_TOKEN_JWK_IMPORT_ERROR
-          expect { auth.verify_token(token) }.to raise_error(
-            AUTH_VERIFY_TOKEN_JWK_IMPORT_ERROR.class,
-            AUTH_VERIFY_TOKEN_JWK_IMPORT_ERROR.message
-          )
-        else
-          expect(auth.verify_token(token)).to include("sub" => "spec-user")
-        end
+        expect(auth.verify_token(token)).to include("sub" => "spec-user")
       end
 
       it "reuses the cached JWKS across repeated verifications" do
@@ -332,38 +330,36 @@ RSpec.describe Hyperon::Wiki::Mcp::Auth do
         expect { auth.verify_token(token) }.to raise_error(NoMethodError, /undefined method/)
       end
 
-      if AUTH_VERIFY_TOKEN_JWK_IMPORT_ERROR
-        it "cannot import a well-formed JWK on this runtime and surfaces the OpenSSL error unwrapped" do
-          # BLOCKER: OpenSSL::PKey::RSA#set_key is unavailable on OpenSSL 3.x, so
-          # every token dies here. The raised class is deliberately compared to the
-          # probe's, which proves the failure is NOT an Auth::VerificationError.
-          stub_jwks(jwks_document)
+      # Unconditional and unbridged: this calls the real #jwk_to_public_key. It was
+      # the S4 RED example and failed before the DER repair with a raw
+      # OpenSSL::PKey::PKeyError. It replaces the pair of probe-keyed branches that
+      # previously stood here, which could not serve as the GREEN acceptance check:
+      # the probe kept selecting the import-error branch, whose expectation then
+      # failed against the repaired method until the branches were replaced by hand.
+      it "imports a well-formed JWK through the real implementation and verifies the token" do
+        stub_jwks(jwks_document)
 
-          expect { auth.verify_token(token) }.to raise_error(
-            AUTH_VERIFY_TOKEN_JWK_IMPORT_ERROR.class,
-            AUTH_VERIFY_TOKEN_JWK_IMPORT_ERROR.message
-          )
-        end
-      else
-        it "imports a well-formed JWK and returns the verified payload" do
-          stub_jwks(jwks_document)
-
-          expect(auth.verify_token(token)).to include(
-            "sub" => "spec-user",
-            "scope" => %w[cards:read cards:write]
-          )
-        end
+        expect(auth.verify_token(token)).to include(
+          "sub" => "spec-user",
+          "role" => "user",
+          "iss" => expected_issuer,
+          "scope" => %w[cards:read cards:write]
+        )
       end
     end
 
-    # Everything below step 5 of the pipeline is unreachable on OpenSSL 3.x. The
-    # import seam is bridged with the public half of the same synthetic key --
-    # exactly what jwk_to_public_key would return if set_key were available -- so
-    # the claim and signature semantics of the real JWT.decode call are recorded.
-    context "with the JWK-to-RSA import seam bridged" do
+    # Claim and signature semantics of the real JWT.decode call at auth.rb:124.
+    #
+    # These examples used to stub #jwk_to_public_key with the public half of the
+    # synthetic key, because the old set_key construction made step 5 impassable on
+    # OpenSSL 3.x. The DER repair removed that need, so the stub is gone: every
+    # example below now runs the real importer against the advertised JWK, which
+    # means signature rejection, algorithm pinning, issuer mismatch and expiry are
+    # recorded against the shipped pipeline end to end rather than against a
+    # stand-in key.
+    context "with the real JWK-to-RSA import" do
       before do
         stub_jwks(jwks_document)
-        allow(auth).to receive(:jwk_to_public_key).and_return(signing_key.public_key)
       end
 
       describe "signature handling" do

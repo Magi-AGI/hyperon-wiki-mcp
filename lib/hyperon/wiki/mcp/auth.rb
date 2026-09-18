@@ -139,6 +139,43 @@ module Hyperon
           raise VerificationError, "Token verification failed: #{e.message}"
         end
 
+        # Scopes carried by the current token, read from a VERIFIED payload.
+        #
+        # A scope is an authorization input, so it is deliberately NOT read from
+        # the auth response body and never from an unverified decode -- either
+        # would let a caller self-assert a grant. The claim is decided and signed
+        # deck-side (POLICY REV4); this only reads what the signature covers.
+        #
+        # Stateless: it verifies on demand rather than caching at fetch time, so
+        # there is no @scopes ivar for #clear_cache! or #refresh_token! to reason
+        # about. That only rules out staleness from an internal cache -- it does
+        # not guarantee the scopes returned here still match whatever token a
+        # caller sends outbound afterward; #refresh_token! or a concurrent caller
+        # can still rotate the token between this call and that later use.
+        #
+        # Both the array shape and the space-delimited string shape the deck emits
+        # are recognized. Anything that is neither an array nor a string yields no
+        # scopes rather than a guess, and a token that fails verification also
+        # yields no scopes rather than propagating the error -- both fail closed.
+        #
+        # @return [Array] scopes from the verified token, or [] when the claim is
+        #   absent, is neither an array nor a string, or the token fails
+        #   verification
+        def scopes
+          claim = verify_token(token)["scope"]
+
+          case claim
+          when Array
+            claim
+          when String
+            claim.split
+          else
+            []
+          end
+        rescue VerificationError, JWKSError
+          []
+        end
+
         # Force token refresh
         #
         # @return [String] the new token
@@ -211,20 +248,27 @@ module Hyperon
         end
 
         # Convert JWK hash to OpenSSL public key
+        #
+        # Builds a PKCS#1 RSAPublicKey DER from the JWK's modulus and exponent and
+        # lets OpenSSL parse it. The previous construction -- allocate an empty
+        # OpenSSL::PKey::RSA and populate it with #set_key -- raises on OpenSSL 3.x
+        # ("rsa#set_key= is incompatible with OpenSSL 3.0"), where pkeys are
+        # immutable after allocation, so no token could reach signature
+        # verification at all. Parsing a DER is the supported route and works on
+        # both OpenSSL 1.1 and 3.x.
         def jwk_to_public_key(jwk)
           # Extract modulus (n) and exponent (e) from JWK
           n = decode_base64url(jwk["n"])
           e = decode_base64url(jwk["e"])
 
-          # Create RSA public key
-          key = OpenSSL::PKey::RSA.new
-          key.set_key(
-            OpenSSL::BN.new(n, 2),
-            OpenSSL::BN.new(e, 2),
-            nil
-          )
+          der = OpenSSL::ASN1::Sequence.new(
+            [
+              OpenSSL::ASN1::Integer.new(OpenSSL::BN.new(n, 2)),
+              OpenSSL::ASN1::Integer.new(OpenSSL::BN.new(e, 2))
+            ]
+          ).to_der
 
-          key
+          OpenSSL::PKey::RSA.new(der)
         end
 
         # Decode base64url-encoded string to binary

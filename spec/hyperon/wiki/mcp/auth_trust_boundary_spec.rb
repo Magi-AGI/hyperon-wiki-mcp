@@ -33,13 +33,19 @@
 #   * #verify_token claim handling, including the fact that it never reads or
 #     enforces a `scope` claim                       -> auth_verify_token_spec.rb
 #
-# On "scope": Auth extracts none. It has no payload field, no reader and no ivar
-# for one, even when the response body offers a `scope` -- whatever scope claim
-# the token itself carries stays sealed inside that opaque string. The one place
-# a scope is produced in this flow is downstream and separate:
-# RackApp#issue_token_response maps the role it is handed onto the scope of its
-# own OAuth token response. That mapping neither feeds nor is fed by
-# Auth#verify_token's JWT claim verification.
+# On "scope": #fetch_token still extracts none. It has no payload field and no
+# ivar for one, even when the response body offers a `scope` -- whatever scope
+# claim the token itself carries stays sealed inside that opaque string for the
+# duration of the fetch. What changed in S5 is that Auth now has a #scopes
+# reader, and it sits on the OTHER side of this boundary: it verifies the token
+# and reads the signed claim, rather than trusting anything the response body
+# said. The body's `scope` is still ignored by both. #scopes is covered in
+# auth_scopes_spec.rb; it is not exercised here, because the tokens in this file
+# carry filler signatures and exist only to disagree with the body.
+#
+# Separately and further downstream: RackApp#issue_token_response maps the role it
+# is handed onto the scope of its own OAuth token response. That mapping neither
+# feeds nor is fed by Auth#verify_token's JWT claim verification.
 
 require "spec_helper"
 require "webmock/rspec"
@@ -239,12 +245,14 @@ RSpec.describe "auth trust boundary" do
 
         auth.token
 
+        # fetch_token reads token/username/role/expires_in and nothing else; the
+        # body's `scope` is dropped. #scopes does not consult it either -- it reads
+        # the verified token claim instead (auth_scopes_spec.rb).
         expect(auth).not_to respond_to(:scope)
-        expect(auth).not_to respond_to(:scopes)
         expect(auth.resolved_role).to eq("gm")
       end
 
-      it "extracts no scope state, though the token it stored carries a scope claim" do
+      it "holds no scope state, though the token it stored carries a scope claim" do
         stub_auth({
                     "token" => player_token,
                     "username" => "decko_account",
@@ -255,14 +263,16 @@ RSpec.describe "auth trust boundary" do
         auth.token
 
         # The claim survives inside the opaque token string. What is absent is any
-        # separately extracted scope state for this client to read or act on.
+        # scope state extracted AT FETCH TIME. #scopes is stateless -- it verifies
+        # on demand -- so there is still no scope ivar that could go stale against
+        # #clear_cache! or #refresh_token!.
         expect(claims_in(auth.token)).to include("scope" => ["cards:read"])
         expect(auth.instance_variables).not_to include(:@scope, :@scopes)
       end
 
-      it "exposes no scope reader on the class" do
-        expect(described_class.public_instance_methods).to include(:username, :resolved_role)
-        expect(described_class.public_instance_methods).not_to include(:scope, :scopes)
+      it "exposes a plural scopes reader and no singular scope reader" do
+        expect(described_class.public_instance_methods).to include(:username, :resolved_role, :scopes)
+        expect(described_class.public_instance_methods).not_to include(:scope)
       end
     end
   end
