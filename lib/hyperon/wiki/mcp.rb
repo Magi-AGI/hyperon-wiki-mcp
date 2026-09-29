@@ -4,6 +4,7 @@ require_relative "mcp/version"
 require_relative "mcp/schema_config"
 require_relative "mcp/config"
 require_relative "mcp/auth"
+require_relative "mcp/request_context"
 require_relative "mcp/client"
 require_relative "mcp/tools"
 
