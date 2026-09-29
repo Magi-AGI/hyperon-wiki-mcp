@@ -1031,8 +1031,11 @@ module Hyperon
           Base64.urlsafe_encode64(data, padding: false)
         end
 
-        # Handle MCP request with per-user Tools (thread-safe context swap)
-        def handle_with_user_tools(request_data, per_user_tools)
+        # Handle MCP request with per-user Tools (thread-safe context swap).
+        # A caller-supplied RequestContext is carried in the swapped context
+        # as-is and dropped with it on restore; without one, the key is
+        # omitted rather than set to nil.
+        def handle_with_user_tools(request_data, per_user_tools, request_context: nil)
           mcp_server = self.class.mcp_server_instance
 
           # Thread-safe: swap server_context for this request
@@ -1040,7 +1043,9 @@ module Hyperon
           @request_mutex.synchronize do
             original_context = mcp_server.server_context
             working_dir = original_context&.dig(:working_directory) || Dir.pwd
-            mcp_server.server_context = { magi_tools: per_user_tools, working_directory: working_dir }
+            request_server_context = { magi_tools: per_user_tools, working_directory: working_dir }
+            request_server_context[:request_context] = request_context if request_context
+            mcp_server.server_context = request_server_context
             response = mcp_server.handle(request_data)
             mcp_server.server_context = original_context
             response
