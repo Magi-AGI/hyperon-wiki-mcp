@@ -37,17 +37,24 @@
 #     element, not because "the whole array" is treated as valid; a mixed or
 #     malformed array that does NOT contain it is hidden/denied by the same
 #     membership check. Neither case is escalation on its own.
-#   * Registry.gate!'s `req = tool.respond_to?(:required_scope) && tool.required_scope`
-#     permits (returns, does not raise) whenever `required_scope` is nil,
-#     false, or the method is absent altogether. This is recorded as a latent
-#     fail-open hazard in an as-yet-unused helper path -- no current TOOLS
-#     entry has a nil/absent required_scope (registry_spec.rb already covers
-#     that invariant) -- not as an intended contract or a currently reachable
-#     escalation.
+#   * Registry.gate! and Registry.visible_for now RESOLVE a tool's declared
+#     requirement before the membership check, and fail closed when they
+#     cannot read one: gate! raises AuthorizationError, visible_for drops the
+#     entry. The previously recorded fail-open -- `req = tool.respond_to?
+#     (:required_scope) && tool.required_scope` permitting whenever
+#     required_scope was nil, false, or absent -- is CLOSED, and this file now
+#     records the closed behavior instead of the hazard. The hazard was never
+#     reachable through TOOLS (registry_spec.rb covers that invariant); what
+#     the fix removes is the possibility that an unreadable requirement reads
+#     as "nothing required". Desired-behavior coverage lives in
+#     spec/server/tools/atomspace/registry_scope_resolution_spec.rb; the
+#     examples below stay characterization of how that resolution composes
+#     with #scopes' unvalidated claim pass-through.
 #
 # Sources under characterization:
 #   lib/hyperon/wiki/mcp/auth.rb:338-351                          Auth#scopes
-#   lib/hyperon/wiki/mcp/server/tools/atomspace/registry.rb:31-40 Registry.visible_for / .gate!
+#   lib/hyperon/wiki/mcp/server/tools/atomspace/registry.rb:40-68 Registry.visible_for / .gate!
+#                                                                 / .resolve_required_scope
 
 require "spec_helper"
 require "webmock/rspec"
@@ -231,26 +238,32 @@ RSpec.describe "Auth#scopes failure surface" do
     end
   end
 
-  describe "Registry.gate! fail-open hazard for nil/absent required_scope" do
-    it "permit-returns for a synthetic tool whose required_scope is nil" do
+  describe "Registry scope resolution for nil/absent required_scope" do
+    it "denies a synthetic tool whose required_scope is nil" do
       nil_scope_tool = Class.new do
         def self.required_scope
           nil
         end
       end
 
-      # Latent fail-open hazard, not an intended contract: `req && ...` short-
-      # circuits false, so gate! returns without raising regardless of scopes.
-      expect { registry.gate!(nil_scope_tool, []) }.not_to raise_error
-      expect { registry.gate!(nil_scope_tool, %w[anything]) }.not_to raise_error
+      # Previously a fail-open: `req && ...` short-circuited false and gate!
+      # returned without raising whatever scopes were held. Resolution now
+      # happens first, so an unreadable requirement denies rather than
+      # permits -- and no granted list can change that.
+      expect { registry.gate!(nil_scope_tool, []) }
+        .to raise_error(Hyperon::Wiki::Mcp::Client::AuthorizationError)
+      expect { registry.gate!(nil_scope_tool, %w[anything]) }
+        .to raise_error(Hyperon::Wiki::Mcp::Client::AuthorizationError)
     end
 
-    it "permit-returns for a synthetic tool with no required_scope method at all" do
+    it "denies a synthetic tool with no required_scope method at all" do
       no_scope_method_tool = Class.new
 
-      # `tool.respond_to?(:required_scope)` is false, so `req` is false and the
-      # same short-circuit applies. Not added to Registry::TOOLS.
-      expect { registry.gate!(no_scope_method_tool, []) }.not_to raise_error
+      # `tool.respond_to?(:required_scope)` is still false, but that now
+      # resolves to no requirement and therefore to a denial. Not added to
+      # Registry::TOOLS.
+      expect { registry.gate!(no_scope_method_tool, []) }
+        .to raise_error(Hyperon::Wiki::Mcp::Client::AuthorizationError)
     end
   end
 
