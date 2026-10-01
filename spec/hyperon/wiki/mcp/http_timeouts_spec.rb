@@ -254,13 +254,52 @@ RSpec.describe Hyperon::Wiki::Mcp::HttpTimeouts do
     let(:deadline_comments) { comments_in("lib/hyperon/wiki/mcp/dispatch_deadline.rb") }
     let(:timeouts_comments) { comments_in("lib/hyperon/wiki/mcp/http_timeouts.rb") }
 
+    # ANCHORED to the heading's own comment line, and that anchoring is the
+    # whole point. "WHAT THIS DOES NOT BOUND" first appears much earlier in the
+    # file as a cross-reference ("see WHAT THIS DOES NOT BOUND"), so an
+    # unanchored /WHAT THIS DOES NOT BOUND(.*?)WHY SERVER DISPATCH ONLY/ starts
+    # from that mention and captures ~107 comment lines instead of the section's
+    # 33 -- including the MODELED, AND NOT A STOPWATCH paragraph, which names
+    # connect_ssl and TLS on its own. The guard therefore passed with the real
+    # TLS bullet deleted. The mutation example below is what keeps that from
+    # coming back.
+    let(:section_pattern) { /^\s*#\s*WHAT THIS DOES NOT BOUND\s*$(.*?)^\s*#\s*WHY SERVER DISPATCH ONLY\s*$/m }
+
+    # The bullet this section exists to carry: the dribbling-TLS escape hatch.
+    let(:tls_bullet_pattern) { /^\s*#\s+\*\s+A dribbling TLS.*?(?=^\s*#\s+\*\s+Outbound calls)/m }
+
     it "lists the TLS handshake under WHAT THIS DOES NOT BOUND" do
-      section = deadline_comments[/WHAT THIS DOES NOT BOUND(.*?)WHY SERVER DISPATCH ONLY/m]
+      section = deadline_comments[section_pattern, 1]
 
       expect(section).not_to be_nil
       expect(section).to match(/connect_ssl/)
       expect(section).to match(/re-arm/i)
       expect(section).to match(/TLS/)
+    end
+
+    # Pins the GUARD, not the prose: deleting the real TLS bullet must turn the
+    # example above red. Without the heading anchor this passed on the mutant,
+    # which made the disclosure unprotected while looking protected.
+    it "fails if the TLS bullet is deleted, rather than matching a cross-reference" do
+      expect(deadline_comments).to match(tls_bullet_pattern)
+
+      mutated = deadline_comments.sub(tls_bullet_pattern, "")
+      expect(mutated).not_to eq(deadline_comments)
+
+      section = mutated[section_pattern, 1]
+      expect(section).not_to be_nil, "the mutation must not destroy the section headings themselves"
+      expect(section).not_to match(/connect_ssl/)
+      expect(section).not_to match(/TLS/)
+    end
+
+    # The section must be the section, not the whole file. If a later edit
+    # widens the capture again, this catches it even if the bullet survives.
+    it "captures only the disclosure section and not the preceding commentary" do
+      section = deadline_comments[section_pattern, 1]
+
+      expect(section).not_to match(/WHY A TOTAL DEADLINE/)
+      expect(section).not_to match(/MODELED, AND NOT A STOPWATCH/)
+      expect(section.lines.length).to be < deadline_comments.lines.length / 2
     end
 
     it "names the absolute-deadline follow-up as what would close it" do
@@ -285,6 +324,35 @@ RSpec.describe Hyperon::Wiki::Mcp::HttpTimeouts do
     # stated as fact while config.rb validates no scheme at all.
     it "qualifies the https assumption as the supported configuration" do
       expect(timeouts_comments).to match(/https in the supported configuration/)
+    end
+
+    # The connect-floor example used to read "a handshake that routinely takes
+    # 1.2s therefore fails inside a 9s dispatch". True of the TCP half, which
+    # ::Timeout.timeout really does cap at 1.0s; NOT true of TLS, whose
+    # allowance re-arms per readiness wait, so a 1.2s handshake arriving in
+    # several records survives. Keeping the halves distinct is the point.
+    it "attributes the 1.2s connect-floor failure to TCP rather than to TLS" do
+      expect(timeouts_comments).to match(/TCP handshake that routinely takes\s*#?\s*1\.2s DOES fail/)
+      expect(timeouts_comments).to match(/The TLS half is not that/)
+      expect(timeouts_comments).to match(/single readiness GAP/)
+    end
+
+    # The modeled bound is per attempt. Nothing debits a ledger, so two builds
+    # close together each get a full weighted allocation -- which a reader can
+    # easily mistake for an aggregate per-dispatch cap.
+    it "states the modeled allocation as per attempt rather than an aggregate ledger" do
+      expect(deadline_comments).to match(/PER ATTEMPT, AND NOT AN AGGREGATE LEDGER/)
+      expect(deadline_comments).to match(/never debited|not any running sum/i)
+      expect(deadline_comments).to match(/NUMBER of attempts/)
+    end
+
+    # "No retry is authorized that cannot pay for itself" is true only in
+    # MIN_ATTEMPT_SECONDS' terms: a retry admitted with 1.1s left is still
+    # allocated a 4s modeled attempt, so the phrase must name the heuristic.
+    it "names the 1s admission heuristic where it says a retry pays for itself" do
+      expect(deadline_comments).to match(/cannot pay for\s*#?\s*itself IN THE ADMISSION HEURISTIC'S TERMS/)
+      expect(deadline_comments).to match(/MIN_ATTEMPT_SECONDS \(1s\) and NOT the 4s modeled/)
+      expect(deadline_comments).to match(/1\.1s left/)
     end
   end
 

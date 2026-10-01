@@ -70,12 +70,37 @@ module Hyperon
       # NOT BOUND, and HttpTimeouts::PHASE_SPENDS.
       #
       # So one armed dispatch is MODELED to spend at most its budget plus 4s,
-      # against the ~127s+ the unbounded chain modeled before. What is
-      # genuinely enforced regardless of peer behavior is narrower and still
-      # worth having: no attempt STARTS on a spent budget, no retry is
-      # authorized that cannot pay for itself, and every allowance handed to a
-      # socket shrinks with the budget. A peer that keeps each phase barely
-      # alive outlives all of that, which is the honest statement of the gap.
+      # against the ~127s+ the unbounded chain modeled before.
+      #
+      # PER ATTEMPT, AND NOT AN AGGREGATE LEDGER. The modeled bound above is
+      # what ONE attempt may be allocated, re-derived from the clock each time
+      # a client is built. Allowances are never debited: HttpTimeouts reads
+      # `remaining` and scales OUTBOUND by it, and nothing records what an
+      # earlier attempt was granted or actually spent. So two builds close
+      # together each receive a full weighted allocation for the budget then
+      # remaining -- a dispatch with 9s left that builds four clients in quick
+      # succession hands out four {1, 1, 6}-style allocations, not one 9s
+      # allocation split four ways. What keeps the TOTAL bounded is the
+      # NUMBER of attempts (a spent budget refuses outright, and
+      # #room_for_retry? gates each retry), not any running sum of grants.
+      #
+      # What is genuinely enforced regardless of peer behavior is therefore
+      # narrower than the arithmetic looks, and still worth having: no attempt
+      # STARTS on a spent budget, no retry is authorized that cannot pay for
+      # itself IN THE ADMISSION HEURISTIC'S TERMS, and every allowance handed
+      # to a socket shrinks with the budget. A peer that keeps each phase
+      # barely alive outlives all of that, which is the honest statement of
+      # the gap.
+      #
+      # "Pay for itself" is MIN_ATTEMPT_SECONDS (1s) and NOT the 4s modeled
+      # floor cost, which is why the phrase is qualified rather than left to
+      # sound like full cost recovery. A retry admitted with 1.1s left clears
+      # the heuristic and is then allocated a floored attempt worth a modeled
+      # MIN_ATTEMPT_SOCKET_SECONDS -- 4s against 1.1s of budget. What the
+      # heuristic guarantees is that the attempt will not be REFUSED the
+      # instant it starts; it does not guarantee the attempt is affordable.
+      # See MIN_ATTEMPT_SECONDS for why the smaller number is the deliberate
+      # choice.
       #
       # Where the floor actually bites, in exact numbers rather than "about":
       # scaled allocation covers itself down to a 9.0s remainder, the point at
@@ -273,6 +298,14 @@ module Hyperon
           # (see Client#take_retry_pause): this predicts, the recheck
           # observes, and only the recheck knows what the sleep actually
           # cost.
+          #
+          # MIN_ATTEMPT_SECONDS is an admission threshold, not the attempt's
+          # cost: clearing it only means the attempt will not be refused at
+          # the seam, so a retry authorized with 1.1s left still gets a
+          # floored allocation whose modeled cost is 4s (see
+          # HttpTimeouts::MIN_ATTEMPT_SOCKET_SECONDS). Nothing here debits an
+          # allocation either -- each admitted attempt is sized against the
+          # clock afresh.
           #
           # @param delay [Numeric] the backoff about to be slept
           # @return [Boolean]

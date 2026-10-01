@@ -95,14 +95,27 @@ module Hyperon
         # CONNECT IS NARROWED HARDER THAN READ, which is the less obvious half
         # of the same trade. Scaling is proportional, so connect falls from 5s
         # to 1.667s on a fresh 15s dispatch and hits the MIN_PHASE_SECONDS
-        # floor at a 9.0s remainder -- 1.0s for TCP and 1.0s for TLS. A
-        # handshake that routinely takes 1.2s therefore fails inside a 9s
-        # dispatch that still has nine seconds of headroom, because the
-        # headroom is not where the allowance went. Accepted for the same
-        # reason: a dispatch that cannot finish a handshake quickly is a
-        # dispatch whose caller has usually already left, and the lock is
-        # worth more than the attempt. Raising MIN_PHASE_SECONDS is the knob
-        # if a deployment's handshakes are genuinely slow.
+        # floor at a 9.0s remainder -- 1.0s for TCP and 1.0s for TLS.
+        #
+        # What that floor refuses has to be stated per half, because only one
+        # half of connect is a stopwatch. A TCP handshake that routinely takes
+        # 1.2s DOES fail inside a 9s dispatch that still has nine seconds of
+        # headroom: PerOperation#connect wraps the TCP half in
+        # ::Timeout.timeout, so 1.0s there is a true ceiling and the headroom
+        # is not where the allowance went. The TLS half is not that. Its
+        # allowance is re-armed on every readiness wait (#connect_ssl via
+        # rescue_readable / rescue_writable), so a handshake whose records
+        # arrive 0.3s apart survives well past 1.0s, and what fails it is a
+        # single readiness GAP longer than 1.0s rather than a slow total. An
+        # earlier revision of this comment claimed the 1.2s total failed on
+        # TLS too; it does not, and PHASE_SPENDS is where that difference is
+        # written down.
+        #
+        # Accepted either way, for the same reason: a dispatch that cannot
+        # finish a handshake quickly is a dispatch whose caller has usually
+        # already left, and the lock is worth more than the attempt. Raising
+        # MIN_PHASE_SECONDS is the knob if a deployment's handshakes are
+        # genuinely slow.
         OUTBOUND = { connect: 5, write: 5, read: 30 }.freeze
 
         # How many times http.rb is CHARGED each declared budget in one
