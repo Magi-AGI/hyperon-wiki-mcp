@@ -44,6 +44,27 @@ module Hyperon
         # Refresh buffer: refresh token this many seconds before expiry
         REFRESH_BUFFER_SECONDS = 300
 
+        # Per-operation timeouts for this class's outbound calls -- the JWKS
+        # fetch and the token fetch.
+        #
+        # Without these, http.rb applies NO timeout at all: a Decko socket
+        # that accepts the connection and then never answers blocks the
+        # calling thread forever. Both calls are reachable from inside
+        # RackApp::DISPATCH_LOCK (tool dispatch -> Client#request ->
+        # Auth#token -> #fetch_token, and the verification path ->
+        # #fetch_jwks), and that lock serializes EVERY MCP dispatch. So one
+        # hung auth socket is not a slow request, it is a stalled server: no
+        # other session's dispatch can acquire the lock to make progress, and
+        # nothing ever releases it.
+        #
+        # Values deliberately match Client#request's existing
+        # `timeout(connect: 5, write: 5, read: 30)` rather than inventing a
+        # tighter auth-specific budget. Parity keeps one documented timeout
+        # policy for all outbound Decko traffic; picking something shorter
+        # here would silently start failing deployments whose auth endpoint is
+        # slow but working, which is a policy change and not this fix.
+        HTTP_TIMEOUTS = { connect: 5, write: 5, read: 30 }.freeze
+
         # Captured-credential fields for a grant read that never got a token.
         NO_CAPTURED_CREDENTIAL = {
           token_version: nil, credential_ref: nil, token_hard_expiry: nil, token_refresh_deadline: nil
@@ -234,7 +255,7 @@ module Hyperon
 
           url = config.url_for("/.well-known/jwks.json")
 
-          response = HTTP.get(url, ssl_context: ssl_context)
+          response = http_client.get(url, ssl_context: ssl_context)
 
           unless response.status.success?
             raise JWKSError,
@@ -571,7 +592,7 @@ module Hyperon
           url = config.url_for("/auth")
           payload = config.auth_payload
 
-          response = HTTP.post(
+          response = http_client.post(
             url,
             json: payload,
             headers: { "Content-Type" => "application/json" },
@@ -666,6 +687,24 @@ module Hyperon
           ctx = OpenSSL::SSL::SSLContext.new
           ctx.verify_mode = OpenSSL::SSL::VERIFY_NONE
           ctx
+        end
+
+        # Timeout-bounded HTTP client for this class's outbound calls.
+        #
+        # Built per call rather than memoized: HTTP::Client carries
+        # per-connection state, and #fetch_jwks and #fetch_token are reachable
+        # concurrently (two sessions, or a verification path racing a refresh),
+        # so a shared instance would be cross-thread mutable state for no gain
+        # -- `HTTP.timeout` only branches an options object.
+        #
+        # Callers need no new rescue: HTTP::TimeoutError and
+        # HTTP::ConnectTimeoutError both descend from HTTP::Error, so an
+        # expired budget already surfaces through the existing
+        # `rescue HTTP::Error` as JWKSError / AuthenticationError -- a timeout
+        # fails closed like any other transport failure instead of escaping as
+        # an unmapped error class.
+        def http_client
+          HTTP.timeout(HTTP_TIMEOUTS)
         end
       end
       # rubocop:enable Metrics/ClassLength
