@@ -779,7 +779,10 @@ RSpec.describe Hyperon::Wiki::Mcp::Client, "retry chain under a dispatch deadlin
       expect(WebMock).to have_requested(:get, cards_url).times(3)
     end
 
-    it "makes no retry at all when the budget is already spent" do
+    # Not a SPENT budget: 0.5s is positive, so the first attempt is made and
+    # #room_for_retry? is what declines -- it wants the 1s backoff plus
+    # MIN_ATTEMPT_SECONDS and has 0.5s, so no retry is ever admitted.
+    it "admits no retry when the budget is smaller than one retry's cost" do
       stub_always_failing
 
       expect do

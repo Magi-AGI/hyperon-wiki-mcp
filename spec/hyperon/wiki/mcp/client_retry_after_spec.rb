@@ -30,7 +30,7 @@
 #     429 case.
 #   * CAPPED, because the value comes from the peer. Off the server path there
 #     is no deadline to refuse an absurd number with -- deliberately, that is
-#     the CLI contract -- so Client::MAX_RETRY_AFTER_SECONDS is what stops a
+#     the CLI contract -- so RetryAfter::MAX_SECONDS is what stops a
 #     `Retry-After: 86400` from parking a batch import for a day.
 #   * BOUNDED BY THE DEADLINE, not exempt from it. A Retry-After is spent
 #     through the same gate as any backoff, so one that does not fit in a
@@ -82,12 +82,53 @@ RSpec.describe Hyperon::Wiki::Mcp::RetryAfter do
       expect(described_class.parse("  12  ")).to eq(12)
     end
 
-    it "reads an HTTP-date as a delta from now, rounding up" do
+    # The delta, not its rounding: httpdate has one-second resolution, so this
+    # range is satisfied by rounding in either direction. The direction itself
+    # is pinned below, on a frozen clock.
+    it "reads an HTTP-date as a delta from now" do
       expect(described_class.parse((Time.now + 10).httpdate)).to be_between(9, 10).inclusive
     end
 
     it "reads a past HTTP-date as no wait rather than a negative one" do
       expect(described_class.parse((Time.now - 500).httpdate)).to eq(0)
+    end
+
+    # ROUNDED UP, exactly, and not merely "rounded". The range assertion above
+    # stays green if from_http_date uses .floor or .round, so the direction
+    # needs a clock frozen at a known fraction of a second to be assertable at
+    # all. It is worth asserting because rounding DOWN retries just BEFORE the
+    # instant the server named, which is the single thing RFC 9110 asks a
+    # client honoring this header not to do.
+    #
+    # Time.now is stubbed rather than the delta computed from a real clock:
+    # these examples are about the arithmetic on a fractional remainder, and a
+    # real clock cannot be asked for one. Time.httpdate is untouched, so the
+    # header still parses as the absolute instant it names.
+    describe "the rounding direction on an HTTP-date" do
+      let(:instant) { Time.utc(2026, 1, 1, 12, 0, 0) }
+
+      # 9.75s to go: .ceil 10, .floor 9, .round 10.
+      it "rounds a fractional delta up rather than down" do
+        allow(Time).to receive(:now).and_return(instant + 0.25)
+
+        expect(described_class.parse((instant + 10).httpdate)).to eq(10)
+      end
+
+      # 9.25s to go: .ceil 10, .floor 9, .round 9 -- the case that rules out
+      # nearest-rounding as well as truncation.
+      it "rounds up even where nearest-rounding would go down" do
+        allow(Time).to receive(:now).and_return(instant + 0.75)
+
+        expect(described_class.parse((instant + 10).httpdate)).to eq(10)
+      end
+
+      # Rounding up must not resurrect an elapsed date as a one-second wait:
+      # the zero floor is applied after the rounding, not before it.
+      it "still reads a fractionally-past date as no wait at all" do
+        allow(Time).to receive(:now).and_return(instant + 0.25)
+
+        expect(described_class.parse((instant - 30).httpdate)).to eq(0)
+      end
     end
 
     # nil rather than 0 for each of these: "cannot read this" has to be
@@ -284,7 +325,7 @@ RSpec.describe Hyperon::Wiki::Mcp::Client, "Retry-After on 429" do
 
     # The peer chooses this number, so it needs a ceiling that does not depend
     # on a deadline being armed.
-    it "caps an absurd request at MAX_RETRY_AFTER_SECONDS" do
+    it "caps an absurd request at RetryAfter::MAX_SECONDS" do
       expect(delay_for("Retry-After" => "86400")).to eq([Hyperon::Wiki::Mcp::RetryAfter::MAX_SECONDS])
     end
 
@@ -417,8 +458,13 @@ RSpec.describe Hyperon::Wiki::Mcp::Client, "Retry-After on 429" do
     end
 
     # The invariant stated as wall-clock: a server can lengthen the waits, but
-    # it cannot make the chain outlive the budget it was armed with.
-    it "never sleeps past the deadline however long the server asks for" do
+    # it cannot talk the chain into STARTING one that does not fit. Asserted as
+    # the chain's own arithmetic, which is all a cooperative gate decides --
+    # each honored wait is refused unless the budget covers it plus an
+    # attempt, so the sleeps this chain chooses stay inside the 15s. A sleep
+    # that OVERRAN its own number is a different case, caught by the recheck
+    # rather than by this example; see the overrun example below.
+    it "refuses an honored wait the budget cannot cover, however long the server asks for" do
       stub_request(:get, cards_url).to_return(rate_limited("Retry-After" => "6"))
 
       started = clock[:now]
@@ -452,7 +498,12 @@ RSpec.describe Hyperon::Wiki::Mcp::Client, "Retry-After on 429" do
       expect(WebMock).to have_requested(:get, cards_url).once
     end
 
-    it "refuses outright when the budget is already spent, header or no header" do
+    # A budget too small to admit ANY retry, which is not the same as a spent
+    # one: 0.5s is still positive, so the first attempt is made and it is the
+    # retry gate that declines -- #room_for_retry? wants the 1s wait plus
+    # MIN_ATTEMPT_SECONDS and has 0.5s. Header or no header, because the floor
+    # the gate charges already exceeds the budget.
+    it "refuses the first retry when the budget cannot admit one, header or no header" do
       stub_request(:get, cards_url).to_return(rate_limited("Retry-After" => "1"))
 
       expect do

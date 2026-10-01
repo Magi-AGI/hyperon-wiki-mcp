@@ -353,7 +353,7 @@ module Hyperon
         # retry more aggressive and a response without it keeps the identical
         # 1s/2s/4s schedule. The resulting number is then gated by exactly the
         # same budget checks as any other backoff -- see #retry_after_backoff?
-        # -- so a peer-chosen wait cannot outlive a server dispatch.
+        # -- so a peer-chosen wait buys no exemption from the dispatch budget.
         def retry_authorized?(response, retry_count)
           delay = RetryAfter.delay(response, default: calculate_retry_delay(retry_count))
           retry_after_backoff?(delay, retry_count, notice: "Retrying request after")
@@ -386,8 +386,9 @@ module Hyperon
         # sent Retry-After (see RetryAfter.delay), and both gates apply to that
         # number unchanged: a 20s Retry-After inside a 15s dispatch fails
         # #room_for_retry? and is REFUSED rather than slept, which is how a
-        # peer-chosen wait is kept from outliving the deadline the lock depends
-        # on.
+        # peer-chosen wait is kept from being slept past the deadline the lock
+        # depends on. Cooperatively, to the same extent as any other backoff:
+        # see the recheck above for what an overrunning sleep can still do.
         #
         # @return [Boolean] true when the caller should make the next attempt
         def retry_after_backoff?(retry_delay, retry_count, notice:)
