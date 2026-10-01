@@ -99,13 +99,200 @@ RSpec.describe Hyperon::Wiki::Mcp::HttpTimeouts do
       expect(bodies.fetch("connect")).not_to include("@read_timeout")
       expect(bodies.fetch("connect_ssl")).not_to include("@read_timeout")
     end
+
+    # D1. PHASE_SPENDS is a FLOOR on what an attempt is billed, never a
+    # ceiling on what it costs, and the docs that read it as a ceiling were
+    # wrong three revisions running. These examples pin the mechanism so the
+    # overclaim cannot come back as prose.
+    #
+    # The mechanism: PerOperation#connect_ssl is not wrapped in
+    # ::Timeout.timeout the way #connect is. It delegates to rescue_readable /
+    # rescue_writable (lib/http/timeout/null.rb), which are written
+    # `retry if @socket.to_io.wait_readable(timeout)` -- so every handshake
+    # record that lands inside the window restarts the FULL allowance. The
+    # same shape governs #readpartial and #write.
+    describe "the readiness-wait escape hatch PHASE_SPENDS cannot express" do
+      # A socket that needs N readiness waits before connect_nonblock
+      # completes -- exactly the case rescue_readable's retry loop exists to
+      # handle, and exactly what a TLS handshake arriving in several records
+      # looks like. Built anonymously so the spec declares no constant.
+      #
+      # Records every timeout it is handed, which is the direct evidence of
+      # re-arming: a decrementing budget would hand down shrinking values.
+      def trickling_socket(waits_needed:, wait_cost:)
+        Class.new do
+          attr_reader :wait_timeouts
+
+          define_method(:initialize) do
+            @waits_needed = waits_needed
+            @wait_cost = wait_cost
+            @wait_timeouts = []
+            # IO::WaitReadable is a module and cannot be raised on its own; a
+            # real non-blocking socket raises an Errno extended with it.
+            @not_ready = Class.new(Errno::EWOULDBLOCK) { include IO::WaitReadable }
+          end
+
+          def connect_nonblock
+            raise @not_ready, "tls record incomplete" if @wait_timeouts.length < @waits_needed
+
+            :ok
+          end
+
+          # http.rb calls @socket.to_io.wait_readable(timeout).
+          def to_io
+            self
+          end
+
+          # Named by http.rb's socket contract, not by us: PerOperation calls
+          # @socket.to_io.wait_readable(timeout). It returns truthy for "a
+          # byte arrived", which is a readiness signal and not a predicate
+          # about this object, so the `?` suffix the cop wants would break
+          # the interface being doubled.
+          def wait_readable(timeout) # rubocop:disable Naming/PredicateMethod
+            @wait_timeouts << timeout
+            sleep(@wait_cost)
+            true # a byte arrived -> rescue_readable retries, re-arming `timeout`
+          end
+          alias_method :wait_writable, :wait_readable
+        end.new
+      end
+
+      def time_connect_ssl(allowance, socket)
+        timeout = HTTP::Timeout::PerOperation.new(
+          connect_timeout: allowance, write_timeout: allowance, read_timeout: allowance
+        )
+        timeout.instance_variable_set(:@socket, socket)
+
+        started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+        timeout.connect_ssl
+        Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
+      end
+
+      # The direct refutation of "connect costs at most 2x its allowance".
+      # Real HTTP::Timeout::PerOperation, real wall clock, scaled down so the
+      # suite does not pay for the demonstration: six waits of 0.05s against a
+      # 0.05s allowance spends ~0.3s, which is 6x the allowance and 3x the 2x
+      # the model charges. Nothing times out -- that is the point.
+      it "lets a TLS handshake outlive PHASE_SPENDS[:connect] x its allowance" do
+        allowance = 0.05
+        socket = trickling_socket(waits_needed: 6, wait_cost: allowance)
+
+        elapsed = time_connect_ssl(allowance, socket)
+
+        modeled_ceiling = allowance * described_class::PHASE_SPENDS.fetch(:connect)
+        expect(socket.wait_timeouts.length).to eq(6)
+        expect(elapsed).to be > modeled_ceiling
+      end
+
+      # WHY it outlives it: the allowance is re-armed, not decremented. Every
+      # wait is handed the whole @connect_timeout, so the handshake's cost is
+      # (waits) x (allowance) with nothing capping the wait count. This is the
+      # assertion that fails the day http.rb grows an absolute deadline, which
+      # is the day the docs may be tightened again.
+      it "re-arms the full connect allowance on every readiness wait" do
+        allowance = 0.02
+        socket = trickling_socket(waits_needed: 4, wait_cost: 0.0)
+
+        time_connect_ssl(allowance, socket)
+
+        expect(socket.wait_timeouts).to eq([allowance] * 4)
+      end
+
+      # The floored case the deadline's overshoot figure is stated in. An
+      # attempt admitted with a sliver of budget gets MIN_PHASE_SECONDS for
+      # TLS, and MIN_ATTEMPT_SOCKET_SECONDS claims the WHOLE attempt costs 4s.
+      # Measured at full scale that single phase has reached 2.034s on a 1s
+      # allowance across five waits; proven here at 1/20th scale so the suite
+      # stays fast. The ratio is what matters and the ratio is unbounded.
+      it "can burn a floored attempt's whole modeled budget inside TLS alone" do
+        scale = 0.05
+        allowance = described_class::MIN_PHASE_SECONDS * scale
+        socket = trickling_socket(waits_needed: 5, wait_cost: allowance * 0.8)
+
+        elapsed = time_connect_ssl(allowance, socket)
+
+        # 5 waits x 0.8 of the allowance == 4x the allowance == the whole
+        # attempt's modeled floor, spent by one phase of it.
+        expect(elapsed).to be > described_class::MIN_ATTEMPT_SOCKET_SECONDS * scale * 0.9
+      end
+
+      # Source-level guard on the gem, in the same spirit as the PHASE_SPENDS
+      # structural check above. If http.rb ever stops re-arming, these fail
+      # and the disclosure can be revisited rather than silently rotting.
+      it "is a property of the installed http.rb, not of this spec's double" do
+        gem_path = Gem.loaded_specs["http"].full_gem_path
+        null_source = File.read(File.join(gem_path, "lib/http/timeout/null.rb"))
+        per_operation = File.read(File.join(gem_path, "lib/http/timeout/per_operation.rb"))
+
+        # The retry that re-arms, in both helpers.
+        expect(null_source).to match(/def rescue_readable.*?retry if @socket\.to_io\.wait_readable\(timeout\)/m)
+        expect(null_source).to match(/def rescue_writable.*?retry if @socket\.to_io\.wait_writable\(timeout\)/m)
+        # connect_ssl goes through them; connect does NOT, because its
+        # ::Timeout.timeout wrapper is a real ceiling on the TCP half.
+        connect_ssl = per_operation[/def connect_ssl.*?^      end/m]
+        expect(connect_ssl).to include("rescue_readable", "rescue_writable")
+        expect(connect_ssl).not_to include("Timeout.timeout")
+        expect(per_operation[/def connect\b.*?^      end/m]).to include("Timeout.timeout")
+      end
+    end
+  end
+
+  # The three statements the 8dad8ef closure review found false were all
+  # prose, and prose is what regressed twice before it. These pin the
+  # disclosure itself: the TLS escape hatch must stay named in the section
+  # that lists what is NOT bounded, and PHASE_SPENDS must stay labelled a
+  # floor. A future edit that quietly restores "socket spend is bounded"
+  # fails here.
+  describe "the documented contract" do
+    def comments_in(relative_path)
+      root = File.expand_path("../../../..", __dir__)
+      File.readlines(File.join(root, relative_path), chomp: true)
+          .select { |line| line.strip.start_with?("#") }
+          .join("\n")
+    end
+
+    let(:deadline_comments) { comments_in("lib/hyperon/wiki/mcp/dispatch_deadline.rb") }
+    let(:timeouts_comments) { comments_in("lib/hyperon/wiki/mcp/http_timeouts.rb") }
+
+    it "lists the TLS handshake under WHAT THIS DOES NOT BOUND" do
+      section = deadline_comments[/WHAT THIS DOES NOT BOUND(.*?)WHY SERVER DISPATCH ONLY/m]
+
+      expect(section).not_to be_nil
+      expect(section).to match(/connect_ssl/)
+      expect(section).to match(/re-arm/i)
+      expect(section).to match(/TLS/)
+    end
+
+    it "names the absolute-deadline follow-up as what would close it" do
+      expect(deadline_comments).to match(/absolute deadline INSIDE the\s*#\s*socket loop/i)
+      expect(timeouts_comments).to match(/absolute-deadline\s*#?\s*HTTP::Timeout subclass/i)
+    end
+
+    # The specific overclaim: an unqualified wall-clock bound on socket time.
+    # Every surviving statement of the bound must mark itself as modeled.
+    it "states the per-attempt bound as modeled rather than measured" do
+      expect(deadline_comments).to match(/MODELED SOCKET SPEND/)
+      expect(deadline_comments).to match(/MODELED, AND NOT A STOPWATCH/)
+      expect(deadline_comments).not_to match(/^\s*#\s*\*\s*One attempt's SOCKET SPEND is at most/)
+    end
+
+    it "labels PHASE_SPENDS a floor rather than a ceiling" do
+      expect(timeouts_comments).to match(/A FLOOR, not a ceiling/)
+      expect(timeouts_comments).to match(/THESE ARE MINIMA/)
+    end
+
+    # The review also found "every Decko URL this gem talks to is https"
+    # stated as fact while config.rb validates no scheme at all.
+    it "qualifies the https assumption as the supported configuration" do
+      expect(timeouts_comments).to match(/https in the supported configuration/)
+    end
   end
 
   describe "WEIGHTED_OUTBOUND_SECONDS" do
     # 45s, not the 40s the hash sums to: the extra 5 is the TLS handshake.
     # This is the real cost of one unclamped attempt and the denominator the
     # allocation scales by.
-    it "is what one unclamped attempt actually spends on an https socket" do
+    it "is what one unclamped attempt is billed on an https socket" do
       expect(described_class::WEIGHTED_OUTBOUND_SECONDS).to eq(45)
       expect(described_class::WEIGHTED_OUTBOUND_SECONDS).to be > described_class::OUTBOUND.values.sum
     end

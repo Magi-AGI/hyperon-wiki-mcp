@@ -42,37 +42,78 @@ module Hyperon
       #   * No retry is authorized unless the backoff AND the attempt it
       #     authorizes both fit (see #room_for_retry?), and the budget is
       #     re-checked after the backoff sleep actually happens.
-      #   * One attempt's SOCKET SPEND is at most what the deadline has left,
-      #     except for the per-phase floor. Socket spend, not the sum of the
-      #     three timeout values: http.rb charges the connect allowance twice
-      #     against a TLS endpoint (connect, then connect_ssl), so a hash
-      #     summing to 15 could still spend 20s on the wire. HttpTimeouts
-      #     allocates against the weighted cost for that reason.
+      #   * One attempt's MODELED SOCKET SPEND is at most what the deadline
+      #     has left, except for the per-phase floor. Modeled spend is each
+      #     granted allowance multiplied by HttpTimeouts::PHASE_SPENDS -- not
+      #     the plain sum of the three timeout values, because http.rb charges
+      #     the connect allowance twice against a TLS endpoint (connect, then
+      #     connect_ssl), so a hash summing to 15 is billed 20 by that model.
+      #     HttpTimeouts allocates against the weighted cost for that reason.
       #   * The floor means a single attempt admitted with a sliver of budget
-      #     left can overshoot by at most
+      #     left can overshoot THE MODEL by at most
       #     HttpTimeouts::MIN_ATTEMPT_SOCKET_SECONDS -- 4s today, counting the
       #     TLS handshake, where an earlier version of this comment said 3s by
       #     counting hash entries instead of socket operations.
       #
-      # So one armed dispatch spends at most its budget plus ~4s of socket
-      # time, versus the ~127s+ it could spend before.
+      # MODELED, AND NOT A STOPWATCH. Read that third bullet as the arithmetic
+      # it is. The deadline bounds what http.rb is TOLD, weighted by how many
+      # times it is told it; it does not bound elapsed wall-clock time on the
+      # socket. Each of http.rb's three allowances -- read, write, AND the TLS
+      # half of connect -- is an INACTIVITY window that re-arms on every
+      # readiness wait, so real elapsed time is (number of waits) x (the
+      # allowance) with nothing capping the wait count. PHASE_SPENDS[:connect]
+      # = 2 is therefore a FLOOR on what a TLS attempt costs, never a ceiling.
+      # Measured against the installed HTTP::Timeout::PerOperation: a 1s
+      # connect allowance spends 1.851s in connect_ssl alone across six
+      # readiness waits, and 2.034s across five 0.4s waits -- the latter is
+      # half the whole-attempt floor burned by one phase. See WHAT THIS DOES
+      # NOT BOUND, and HttpTimeouts::PHASE_SPENDS.
       #
-      # Where the floor actually bites: scaled allocation stays at or under the
-      # budget on its own down to a ~9s remainder. Below that the floors start
-      # to dominate, and between a ~4s remainder and zero an admitted attempt
-      # is floored to the 4s worst case. That window is bounded and is the
-      # price of never handing a socket a zero timeout, which http.rb cannot
-      # read as "fail fast".
+      # So one armed dispatch is MODELED to spend at most its budget plus 4s,
+      # against the ~127s+ the unbounded chain modeled before. What is
+      # genuinely enforced regardless of peer behavior is narrower and still
+      # worth having: no attempt STARTS on a spent budget, no retry is
+      # authorized that cannot pay for itself, and every allowance handed to a
+      # socket shrinks with the budget. A peer that keeps each phase barely
+      # alive outlives all of that, which is the honest statement of the gap.
+      #
+      # Where the floor actually bites, in exact numbers rather than "about":
+      # scaled allocation covers itself down to a 9.0s remainder, the point at
+      # which connect and write land exactly on
+      # HttpTimeouts::MIN_PHASE_SECONDS. Below 9.0 those two are floored while
+      # read still scales -- left=3.0 allocates {1, 1, 2} for a modeled 5.0s.
+      # At or below 1.5 all three are floored to {1, 1, 1}, a modeled
+      # MIN_ATTEMPT_SOCKET_SECONDS of 4s however little is left, which is
+      # where the worst modeled overshoot (+3.99s at left=0.01) lives. That
+      # window is bounded in the model and is the price of never handing a
+      # socket a zero timeout, which http.rb cannot read as "fail fast".
       #
       # WHAT THIS DOES NOT BOUND
       #
       #   * A trickling peer. http.rb's read and write budgets are INACTIVITY
       #     timeouts, re-armed on every wait_readable / wait_writable
-      #     (http-5.3.1 lib/http/timeout/per_operation.rb). A server that
-      #     emits one byte inside each window outlives any total this module
-      #     can express. Bounding that needs an absolute deadline inside the
-      #     socket loop -- a custom HTTP::Timeout class -- which is a
-      #     follow-up, not this seam.
+      #     (http-5.3.1 lib/http/timeout/per_operation.rb #readpartial and
+      #     #write). A server that emits one byte inside each window outlives
+      #     any total this module can express.
+      #   * A dribbling TLS handshake -- the same defect, through the same
+      #     mechanism, in the phase the bullets above model as costing exactly
+      #     2x. PerOperation#connect_ssl wraps @socket.connect_nonblock in
+      #     rescue_readable(@connect_timeout) / rescue_writable(...), and
+      #     those helpers (lib/http/timeout/null.rb) are written
+      #     `retry if @socket.to_io.wait_readable(timeout)`: every handshake
+      #     record that arrives inside the window re-arms the FULL connect
+      #     allowance. Only the TCP half is genuinely capped, because
+      #     #connect wraps it in ::Timeout.timeout. So PHASE_SPENDS[:connect]
+      #     = 2 states the minimum a TLS attempt is billed, and a handshake
+      #     split across N records can spend N x the allowance instead.
+      #
+      #     Both of these want the same fix: an absolute deadline INSIDE the
+      #     socket loop -- a custom HTTP::Timeout subclass that compares a
+      #     fixed wall-clock deadline before each retry rather than re-arming
+      #     a fresh window. One class closes read, write and TLS together. It
+      #     is a tracked follow-up and not this seam, and until it lands the
+      #     bound above must be read as a bound on the allocation model and on
+      #     the NUMBER of attempts, which is exactly what it is.
       #   * Outbound calls that do not go through HttpTimeouts. Tools
       #     #upload_from_url downloads an arbitrary third-party URL with its
       #     own Net::HTTP open/read timeouts; it never touches Decko, and it
@@ -132,15 +173,17 @@ module Hyperon
         # seam will refuse the instant it begins spends lock time to learn
         # nothing.
         #
-        # An ADMISSION HEURISTIC, not the real cost of an attempt. The real
-        # floor cost is HttpTimeouts::MIN_ATTEMPT_SOCKET_SECONDS (4s), and this
-        # is deliberately smaller: requiring 4s of headroom before any retry
-        # would refuse retries that usually succeed in milliseconds, trading a
-        # frequent real failure for a rare bounded overshoot. What this number
-        # buys is the guarantee that an authorized attempt will not be REFUSED
-        # outright -- it does not promise the attempt finishes inside the
-        # budget. The overshoot that remains is the floor window documented
-        # above, and it is bounded by MIN_ATTEMPT_SOCKET_SECONDS.
+        # An ADMISSION HEURISTIC, not the real cost of an attempt. The modeled
+        # floor cost is HttpTimeouts::MIN_ATTEMPT_SOCKET_SECONDS (4s), and
+        # this is deliberately smaller: requiring 4s of headroom before any
+        # retry would refuse retries that usually succeed in milliseconds,
+        # trading a frequent real failure for a rare bounded overshoot. What
+        # this number buys is the guarantee that an authorized attempt will
+        # not be REFUSED outright -- it does not promise the attempt finishes
+        # inside the budget. The overshoot that remains is the floor window
+        # documented above, bounded by MIN_ATTEMPT_SOCKET_SECONDS in the
+        # allocation model and not on the stopwatch (see WHAT THIS DOES NOT
+        # BOUND).
         #
         # This is also NOT a floor handed to a socket --
         # HttpTimeouts::MIN_PHASE_SECONDS is that, and only for an attempt

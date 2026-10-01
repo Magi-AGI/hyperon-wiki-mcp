@@ -91,18 +91,34 @@ module Hyperon
         # -- and it is the chosen trade, because the alternative is holding
         # DISPATCH_LOCK past the point the caller has already hung up. The
         # 30s figure survives wherever nobody is blocked waiting on it.
+        #
+        # CONNECT IS NARROWED HARDER THAN READ, which is the less obvious half
+        # of the same trade. Scaling is proportional, so connect falls from 5s
+        # to 1.667s on a fresh 15s dispatch and hits the MIN_PHASE_SECONDS
+        # floor at a 9.0s remainder -- 1.0s for TCP and 1.0s for TLS. A
+        # handshake that routinely takes 1.2s therefore fails inside a 9s
+        # dispatch that still has nine seconds of headroom, because the
+        # headroom is not where the allowance went. Accepted for the same
+        # reason: a dispatch that cannot finish a handshake quickly is a
+        # dispatch whose caller has usually already left, and the lock is
+        # worth more than the attempt. Raising MIN_PHASE_SECONDS is the knob
+        # if a deployment's handshakes are genuinely slow.
         OUTBOUND = { connect: 5, write: 5, read: 30 }.freeze
 
-        # How many times http.rb actually SPENDS each declared budget in one
-        # attempt against an HTTPS endpoint.
+        # How many times http.rb is CHARGED each declared budget in one
+        # attempt against an HTTPS endpoint. A FLOOR, not a ceiling -- read
+        # the caveat below before treating this as a bound.
         #
-        # This is the correction that makes the advertised bound true. The
-        # obvious reading of OUTBOUND is "one attempt costs at most 40s of
+        # This is the correction that makes the allocation arithmetic honest.
+        # The obvious reading of OUTBOUND is "one attempt costs at most 40s of
         # socket time", and that is wrong: http-5.3.1 charges @connect_timeout
         # TWICE on a TLS endpoint -- once in PerOperation#connect for the TCP
         # handshake, then again in #connect_ssl for the TLS handshake
         # (lib/http/timeout/per_operation.rb). Every Decko URL this gem talks
-        # to is https, so connect is a 2x line item and not a 1x one.
+        # to is https in the supported configuration -- nothing validates the
+        # scheme, and a plain-http DECKO_API_BASE_URL is accepted verbatim, in
+        # which case the 2x weighting merely over-reserves. So connect is a 2x
+        # line item and not a 1x one.
         #
         # Splitting `remaining` across the three HASH ENTRIES therefore did not
         # bound socket time: a 15s budget allocated {5, 5, 5} summed to 15 but
@@ -110,17 +126,38 @@ module Hyperon
         # divides the budget by what the phases COST rather than by how many
         # entries the hash has.
         #
+        # THESE ARE MINIMA. http.rb spends each of these allowances AT LEAST
+        # once per listed spend, and may spend any of them MANY more times:
+        # #readpartial, #write, and the rescue_readable / rescue_writable
+        # helpers that #connect_ssl is built from (lib/http/timeout/null.rb)
+        # all re-arm the full allowance on every readiness wait, so elapsed
+        # time per phase is (waits) x (allowance) with no cap on the wait
+        # count. Measured against the installed PerOperation with a socket
+        # double that signals IO::WaitReadable: a 1s connect allowance spends
+        # 1.851s inside connect_ssl across six waits. Only
+        # PerOperation#connect's TCP half is a true ceiling, because it alone
+        # is wrapped in ::Timeout.timeout.
+        #
+        # Consequence, stated plainly so it cannot be mislaid again: the
+        # deadline bounds MODELED spend -- allowances weighted by this hash --
+        # and the number of attempts. It does not bound wall-clock socket
+        # time. DispatchDeadline's WHAT THIS DOES NOT BOUND carries the same
+        # disclosure, and the fix for both is the absolute-deadline
+        # HTTP::Timeout subclass tracked as a follow-up.
+        #
         # Not a derived constant: it is a fact about the gem's socket loop that
         # only a reader of that loop can confirm, so it is written down where
         # the arithmetic that depends on it lives, and pinned by spec.
         PHASE_SPENDS = { connect: 2, write: 1, read: 1 }.freeze
 
-        # The weighted cost of one unclamped attempt: what OUTBOUND actually
-        # spends on an HTTPS socket, as opposed to what its values sum to.
+        # The weighted cost of one unclamped attempt: what OUTBOUND is billed
+        # on an HTTPS socket under the PHASE_SPENDS model, as opposed to what
+        # its values sum to.
         #
         # 45s (5 connect x2, 5 write, 30 read), not the 40s the hash sums to.
         # This is the denominator the allocation scales by, so a budget at or
-        # above it is handed OUTBOUND untouched.
+        # above it is handed OUTBOUND untouched. A real attempt against a
+        # peer that trickles can exceed it -- see PHASE_SPENDS.
         WEIGHTED_OUTBOUND_SECONDS = OUTBOUND.sum { |phase, seconds| seconds * PHASE_SPENDS.fetch(phase) }
 
         # The floor under any single phase of an attempt that is allowed to
@@ -129,16 +166,22 @@ module Hyperon
         # a sliver of budget left still gets a positive, finite number.
         #
         # This floor is the one documented way an attempt can outlive the
-        # remaining budget. Work whose budget is already GONE is refused
-        # outright rather than floored -- see .effective_budgets.
+        # remaining budget WITHIN THE MODEL. Work whose budget is already GONE
+        # is refused outright rather than floored -- see .effective_budgets.
         MIN_PHASE_SECONDS = 1
 
-        # The worst case one floored attempt can spend on an HTTPS socket:
-        # MIN_PHASE_SECONDS charged once per SPEND, so 4s today and not 3s.
+        # The worst case one floored attempt is MODELED to spend on an HTTPS
+        # socket: MIN_PHASE_SECONDS charged once per SPEND, so 4s today and
+        # not 3s.
         #
         # The 3s figure that stood here counted hash entries instead of socket
         # operations and so understated the floor by exactly the TLS handshake.
         # This is the number the deadline's documented overshoot is stated in.
+        #
+        # Not a wall-clock ceiling. A floored attempt hands TLS a 1s
+        # allowance, and a handshake arriving in five records has been
+        # measured spending 2.034s in connect_ssl alone -- half this figure
+        # burned by one phase. See PHASE_SPENDS.
         MIN_ATTEMPT_SOCKET_SECONDS = MIN_PHASE_SECONDS * PHASE_SPENDS.values.sum
 
         # A timeout-bounded HTTP client, ready to chain (.headers, .get, ...).
@@ -184,8 +227,10 @@ module Hyperon
         #     handed to each of them. http.rb runs connect, then write, then
         #     read, sequentially, so clamping each one to `remaining`
         #     independently allowed remaining + connect + write -- 25s of
-        #     socket time on a 15s budget. Splitting makes SOCKET SPEND the
-        #     thing the deadline bounds, which is what "total" has to mean.
+        #     socket time on a 15s budget. Splitting makes MODELED SOCKET
+        #     SPEND the thing the deadline bounds, which is the strongest
+        #     reading of "total" available without replacing http.rb's
+        #     timeout class (see PHASE_SPENDS for what the model omits).
         #
         # THE CLOCK IS READ EXACTLY ONCE.
         #
@@ -234,10 +279,10 @@ module Hyperon
         # Split `left` seconds across the phases of one attempt.
         #
         # Scales each declared budget by the fraction of a full attempt's
-        # SOCKET COST the budget can pay for, so what the deadline bounds is
-        # time actually spent on the wire rather than the sum of three hash
+        # MODELED SOCKET COST the budget can pay for, so what the deadline
+        # bounds is weighted allowance rather than the sum of three hash
         # entries. WEIGHTED_OUTBOUND_SECONDS is that full cost (45s), which
-        # charges connect twice because a TLS attempt spends it twice.
+        # charges connect twice because a TLS attempt is billed it twice.
         #
         # Proportional rather than sequential-with-reservations, which is what
         # stood here: reserving a floor for each phase still to come made the
@@ -249,16 +294,20 @@ module Hyperon
         # than a full connect followed by a starved read.
         #
         # Above WEIGHTED_OUTBOUND_SECONDS every phase pins to its declared
-        # value, so a generous budget is OUTBOUND's numbers unchanged.
+        # value, so a generous budget is OUTBOUND's numbers unchanged. Below
+        # 9.0 connect and write sit on MIN_PHASE_SECONDS while read still
+        # scales; at or below 1.5 all three are floored.
         #
-        # One honest caveat remains, documented on DispatchDeadline: http.rb's
-        # read and write budgets are inactivity windows re-armed per wait, so a
-        # peer that trickles one byte per window outlives any total this module
-        # can express. That needs an absolute deadline inside the socket loop
-        # and is not fixable here.
+        # One honest caveat remains, documented on PHASE_SPENDS and on
+        # DispatchDeadline: http.rb's read and write budgets -- and the TLS
+        # half of connect -- are inactivity windows re-armed per readiness
+        # wait, so a peer that trickles outlives any total this module can
+        # express. The numbers below bound what http.rb is TOLD, not what the
+        # socket takes. Closing that needs an absolute deadline inside the
+        # socket loop and is not fixable here.
         #
         # @param left [Numeric] seconds the deadline has left; must be positive
-        # @return [Hash] budgets whose weighted socket cost is at most `left`,
+        # @return [Hash] budgets whose MODELED socket cost is at most `left`,
         #   except for the MIN_ATTEMPT_SOCKET_SECONDS floor
         def self.phase_budgets(left)
           share = left / WEIGHTED_OUTBOUND_SECONDS.to_f

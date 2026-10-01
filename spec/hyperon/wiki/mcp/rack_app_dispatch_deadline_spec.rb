@@ -149,20 +149,33 @@ RSpec.describe Hyperon::Wiki::Mcp::RackApp, "dispatch deadline" do
     "lib/hyperon/wiki/mcp/dispatch_deadline.rb"
   end
 
+  # THE guard predicate, defined exactly once.
+  #
+  # It used to be written twice -- once in .arming_sources, once again as a
+  # copy inside the self-test block below -- which meant the seven examples
+  # that test the guard tested a DUPLICATE of it. Editing the real one alone
+  # would have left all seven green. Both callers now share this.
+  #
+  # @param code [String] Ruby source
+  # @return [Boolean] whether it arms the dispatch deadline
+  def self.arms_deadline?(code)
+    stripped = code.lines.map(&:chomp).reject { |line| line.strip.start_with?("#") }.join("\n")
+    variable = Regexp.escape(Hyperon::Wiki::Mcp::DispatchDeadline::VARIABLE.to_s)
+
+    stripped.match?(/DispatchDeadline\.arm\b/) ||
+      # thread_variable_set reaching the deadline's key, however it is spelled
+      # and across however many lines: the constant, the namespaced constant,
+      # or the raw symbol.
+      stripped.match?(/thread_variable_set\s*\(?\s*(?:[\w:]*DispatchDeadline::)?VARIABLE\b/m) ||
+      stripped.match?(/thread_variable_set\s*\(?\s*:?#{variable}\b/m)
+  end
+
   def self.arming_sources
     gem_root = File.expand_path("../../../..", __dir__)
     candidates = Dir.glob("#{gem_root}/lib/**/*.rb") + Dir.glob("#{gem_root}/bin/*")
-    variable = Regexp.escape(Hyperon::Wiki::Mcp::DispatchDeadline::VARIABLE.to_s)
 
     arming = candidates.select { |path| File.file?(path) }.select do |path|
-      code = File.readlines(path, chomp: true).reject { |line| line.strip.start_with?("#") }.join("\n")
-
-      code.match?(/DispatchDeadline\.arm\b/) ||
-        # thread_variable_set reaching the deadline's key, however it is spelled
-        # and across however many lines: the constant, the namespaced constant,
-        # or the raw symbol.
-        code.match?(/thread_variable_set\s*\(?\s*(?:[\w:]*DispatchDeadline::)?VARIABLE\b/m) ||
-        code.match?(/thread_variable_set\s*\(?\s*:?#{variable}\b/m)
+      arms_deadline?(File.read(path))
     end
 
     arming.map { |path| path.delete_prefix("#{gem_root}/") } - [deadline_owner]
@@ -184,14 +197,27 @@ RSpec.describe Hyperon::Wiki::Mcp::RackApp, "dispatch deadline" do
 
   # The guard tested against itself. Each of these is a real way to arm the
   # budget outside #arm, and each one the previous guard would have missed.
+  #
+  # These call .arms_deadline? -- the SAME predicate .arming_sources uses, not
+  # a transcription of it. The previous version of this block re-typed the
+  # three regexes, so editing the real guard alone left every example here
+  # green: a self-test that could not fail on the thing it tests.
   describe "the arming guard itself" do
     def guard_matches?(code)
-      stripped = code.lines.map(&:chomp).reject { |line| line.strip.start_with?("#") }.join("\n")
-      variable = Regexp.escape(Hyperon::Wiki::Mcp::DispatchDeadline::VARIABLE.to_s)
+      self.class.arms_deadline?(code)
+    end
 
-      stripped.match?(/DispatchDeadline\.arm\b/) ||
-        stripped.match?(/thread_variable_set\s*\(?\s*(?:[\w:]*DispatchDeadline::)?VARIABLE\b/m) ||
-        stripped.match?(/thread_variable_set\s*\(?\s*:?#{variable}\b/m)
+    # The copy that used to live here is what this example rules out: the
+    # predicate these seven exercise must be the one .arming_sources calls,
+    # inherited from the same example group rather than re-typed in this one.
+    it "is the same predicate the file scan uses, not a copy of it" do
+      scan_owner = self.class.method(:arming_sources).owner
+      guard_owner = self.class.method(:arms_deadline?).owner
+
+      expect(guard_owner).to eq(scan_owner)
+      # A re-typed copy would be a `def self.arms_deadline?` in THIS group,
+      # which is what this rules out.
+      expect(self.class.singleton_class.instance_methods(false)).not_to include(:arms_deadline?)
     end
 
     it "catches DispatchDeadline.arm" do

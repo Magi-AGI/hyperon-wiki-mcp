@@ -16,15 +16,27 @@
 #     authorizes, re-checking after the sleep actually happens.
 #
 #     Stated as an invariant: no attempt starts on a spent budget, and one
-#     attempt's SOCKET SPEND is at most what is left, give or take the
-#     MIN_ATTEMPT_SOCKET_SECONDS floor. Socket spend rather than the sum of the
-#     three timeout values, because http.rb charges the connect allowance twice
-#     against a TLS endpoint -- a hash summing to 15 spent 20 on the wire, which
-#     is why these specs weight each budget by PHASE_SPENDS.
+#     attempt's MODELED SOCKET SPEND is at most what is left, give or take
+#     the MIN_ATTEMPT_SOCKET_SECONDS floor. Modeled spend rather than the sum
+#     of the three timeout values, because http.rb charges the connect
+#     allowance twice against a TLS endpoint -- a hash summing to 15 is
+#     billed 20 -- which is why these specs weight each budget by
+#     PHASE_SPENDS.
 #
-#     What is NOT bounded is documented on DispatchDeadline: a trickling peer
-#     defeats any total, because http.rb's read/write budgets are inactivity
-#     windows re-armed per wait.
+#     MODELED is load-bearing in that sentence, and these specs cannot say
+#     more than that. They drive a stubbed clock and allocate budgets; they
+#     never open a socket. What they bound is the ALLOCATION. What http.rb
+#     then does with an allowance is a separate question, answered in
+#     http_timeouts_spec.rb's "readiness-wait escape hatch" examples, which
+#     drive the real HTTP::Timeout::PerOperation and show a TLS handshake
+#     spending several times its allowance because every readiness wait
+#     re-arms it. A sweep over this file's arithmetic structurally cannot
+#     detect that, which is how the overclaim survived two reviews.
+#
+#     What is NOT bounded is documented on DispatchDeadline: a trickling
+#     peer defeats any total, through read, write, AND the TLS half of
+#     connect, because http.rb's allowances are inactivity windows re-armed
+#     per readiness wait.
 #
 #   * UNARMED (everything else): the behavior that shipped, unchanged. The
 #     same Client, Auth, and Tools serve the stdio entrypoints
@@ -301,9 +313,17 @@ RSpec.describe Hyperon::Wiki::Mcp::HttpTimeouts, "under a dispatch deadline" do
   # allowance TWICE (PerOperation#connect, then #connect_ssl), so {5,5,5}
   # summed to 15 and spent 20.
   #
-  # What has to be bounded is SOCKET SPEND, so that is what these specs
-  # measure: every assertion below weights each granted budget by
+  # What has to be bounded is MODELED SOCKET SPEND, so that is what these
+  # specs measure: every assertion below weights each granted budget by
   # PHASE_SPENDS rather than adding the three numbers up.
+  #
+  # And only modeled spend. These examples never touch a socket, so they
+  # measure the allocation, not the wire. PHASE_SPENDS is a floor on what
+  # http.rb bills, not a ceiling on what a phase costs -- the real
+  # PerOperation re-arms its allowance on every readiness wait, which
+  # http_timeouts_spec.rb pins directly. No sweep over this arithmetic can
+  # see that, which is exactly why the sweep below is not evidence of a
+  # wall-clock bound.
   describe "the per-attempt socket spend" do
     # The weighting that makes these assertions mean something. Adding the
     # hash values is the measurement that let the TLS overshoot through.
@@ -339,19 +359,33 @@ RSpec.describe Hyperon::Wiki::Mcp::HttpTimeouts, "under a dispatch deadline" do
 
     # Swept rather than spot-checked: the bug was an invariant that held at the
     # values someone happened to assert and failed everywhere else. The sweep is
-    # against socket spend, and the only slack allowed is the floor -- stated as
-    # MIN_ATTEMPT_SOCKET_SECONDS (4s, counting TLS) rather than the 3s an
-    # entry-count gave.
+    # against modeled socket spend, and the only slack allowed is the floor --
+    # stated as MIN_ATTEMPT_SOCKET_SECONDS (4s, counting TLS) rather than the
+    # 3s an entry-count gave.
+    #
+    # 0.01s steps from 0.01 to 60.00, which is the granularity the commit
+    # message claims: 6000 points, all arithmetic, no I/O. A coarser 0.5s grid
+    # was what stood here, and a grid coarse enough to miss a boundary is how
+    # the first version of this invariant passed while being false.
     it "holds across the whole range of remaining budgets" do
-      (1..120).each do |tenths|
-        Hyperon::Wiki::Mcp::DispatchDeadline.arm(tenths * 0.5) do
+      worst = 0.0
+
+      (1..6000).each do |hundredths|
+        Hyperon::Wiki::Mcp::DispatchDeadline.arm(hundredths * 0.01) do
           left = Hyperon::Wiki::Mcp::DispatchDeadline.remaining
           budgets = described_class.effective_budgets
+          spend = socket_spend(budgets)
 
-          expect(socket_spend(budgets)).to be <= left + described_class::MIN_ATTEMPT_SOCKET_SECONDS + 0.001
+          expect(spend).to be <= left + described_class::MIN_ATTEMPT_SOCKET_SECONDS + 0.001
           budgets.each_value { |seconds| expect(seconds).to be >= described_class::MIN_PHASE_SECONDS }
+          worst = [worst, spend - left].max
         end
       end
+
+      # The worst modeled overshoot lives at the smallest admitted budget,
+      # where all three phases are floored: 4.0 modeled against 0.01 left.
+      # Pinned so a change that widens it has to say so.
+      expect(worst).to be_within(0.001).of(described_class::MIN_ATTEMPT_SOCKET_SECONDS - 0.01)
     end
 
     # Above the weighted cost of a full attempt there is nothing to narrow, so a
@@ -395,9 +429,65 @@ RSpec.describe Hyperon::Wiki::Mcp::HttpTimeouts, "under a dispatch deadline" do
       end
     end
 
-    # The floor window, stated honestly. Below ~4s remaining an admitted attempt
-    # is floored, so it CAN outlive the budget -- but by at most
-    # MIN_ATTEMPT_SOCKET_SECONDS, which is the number the docs now advertise.
+    # The floor window, in exact boundaries rather than "about 4s". The docs
+    # said "below a ~4s remainder an admitted attempt is floored to the 4s
+    # worst case", and the closure review disproved it in both directions:
+    # at left=4.0 the modeled spend is 5.667, not 4.0, and full flooring does
+    # not begin until 1.5. These four examples pin the real shape of the
+    # curve so the prose cannot drift off it again.
+    describe "where the floor actually bites" do
+      def budgets_at(left)
+        Hyperon::Wiki::Mcp::DispatchDeadline.arm(left) { described_class.effective_budgets }
+      end
+
+      # The top of the window. At exactly 9.0 the two 5s phases land on
+      # MIN_PHASE_SECONDS without being clamped, so allocation still covers
+      # itself: modeled spend is 9.0 on the nose.
+      it "needs no floor at all down to a 9.0s remainder" do
+        budgets = budgets_at(9.0)
+
+        expect(budgets).to eq(connect: 1.0, write: 1.0, read: 6.0)
+        expect(socket_spend(budgets)).to be_within(0.001).of(9.0)
+      end
+
+      # One hundredth below it the clamp engages and the overshoot begins --
+      # tiny, but this is the boundary, and it is 9.0 rather than "~4s".
+      it "starts overshooting immediately below 9.0" do
+        budgets = budgets_at(8.99)
+
+        expect(budgets[:connect]).to eq(described_class::MIN_PHASE_SECONDS)
+        expect(socket_spend(budgets)).to be > 8.99
+        expect(socket_spend(budgets)).to be_within(0.001).of(8.9933)
+      end
+
+      # The intermediate case no example covered, and the one that disproves
+      # "floored to the 4s worst case" below 4s: at left=3.0 connect and write
+      # are floored while read is still scaling, giving {1, 1, 2} -- a modeled
+      # 5.0s, which is neither 3.0 nor 4.0.
+      it "floors connect and write while read still scales" do
+        budgets = budgets_at(3.0)
+
+        expect(budgets).to eq(connect: 1.0, write: 1.0, read: 2.0)
+        expect(socket_spend(budgets)).to be_within(0.001).of(5.0)
+        expect(socket_spend(budgets)).to be > described_class::MIN_ATTEMPT_SOCKET_SECONDS
+      end
+
+      # The bottom of the window. 1.5 is where read finally reaches the floor
+      # too (30 * 1.5/45 == 1.0), and from there down every budget is {1,1,1}
+      # however little is left.
+      it "floors every phase at or below 1.5s and not before" do
+        expect(budgets_at(1.51)[:read]).to be > described_class::MIN_PHASE_SECONDS
+        expect(budgets_at(1.5)).to eq(connect: 1.0, write: 1.0, read: 1.0)
+        expect(budgets_at(0.01)).to eq(connect: 1.0, write: 1.0, read: 1.0)
+        expect(socket_spend(budgets_at(0.01))).to eq(described_class::MIN_ATTEMPT_SOCKET_SECONDS)
+      end
+    end
+
+    # The floor window, stated honestly. At or below a 1.5s remainder an
+    # admitted attempt is floored to {1,1,1}, so it CAN outlive the budget --
+    # but by at most MIN_ATTEMPT_SOCKET_SECONDS in the allocation model, which
+    # is the number the docs advertise. Wall clock is a different question;
+    # see http_timeouts_spec.rb.
     it "bounds a floored attempt's overshoot by the documented floor" do
       Hyperon::Wiki::Mcp::DispatchDeadline.arm(15) do
         advance(14.9)
