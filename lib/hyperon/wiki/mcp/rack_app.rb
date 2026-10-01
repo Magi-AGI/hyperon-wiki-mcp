@@ -117,6 +117,17 @@ module Hyperon
         end
       end
 
+      # Who an authenticated MCP request is, as resolved from its Bearer token:
+      # the per-user Tools the session holds, the session id the token's `jti`
+      # named, and the claims the SIGNATURE covered.
+      #
+      # The three travel together because they are only meaningful together.
+      # The Tools alone say what a request can call but not who is calling; the
+      # claims alone name an identity with no session behind it. Keeping them
+      # as one value means the dispatch path cannot pair a session's tools with
+      # an identity read from somewhere else -- an unverified decode, say.
+      BearerPrincipal = Struct.new(:tools, :session_id, :verified_claims, keyword_init: true)
+
       # Pure Rack app without Sinatra - complete control over middleware
       # rubocop:disable Metrics/ClassLength
       class RackApp
@@ -578,15 +589,16 @@ module Hyperon
                                                     })]]
             end
 
-            # Check Bearer token for per-user Tools
-            per_user_tools = resolve_bearer_token(env)
+            # Resolve the Bearer token to the principal it names: the session's
+            # per-user Tools plus the identity the signature covered.
+            principal = resolve_bearer_principal(env)
 
             # Fail closed: a request without a valid per-user token is rejected
             # unless it is a trusted same-box caller (localhost origin + shared
             # secret). This is independent of OAUTH_REQUIRE_AUTH / oauth_enabled?
             # so a missing or degraded OAuth stack can never widen external
             # access to the default identity.
-            if per_user_tools.nil? && !self.class.trusted_local_caller?(env)
+            if principal.nil? && !self.class.trusted_local_caller?(env)
               issuer_url = self.class.oauth_issuer_url
               headers = add_mcp_headers({
                                           "Content-Type" => "application/json",
@@ -602,8 +614,14 @@ module Hyperon
 
             request_data = JSON.parse(body, symbolize_names: true)
 
-            response = if per_user_tools
-                         handle_with_user_tools(request_data, per_user_tools)
+            response = if principal
+                         # The context is built per request, from this
+                         # principal's own grant read, and may be nil when no
+                         # grant backs it -- see #build_request_context for why
+                         # that absence is the fail-closed answer rather than a
+                         # refusal.
+                         handle_with_user_tools(request_data, principal.tools,
+                                                request_context: build_request_context(principal))
                        else
                          handle_with_default_context(request_data)
                        end
@@ -999,8 +1017,17 @@ module Hyperon
           end
         end
 
-        # Extract and verify Bearer token, return per-user Tools or nil
-        def resolve_bearer_token(env)
+        # Extract and verify a Bearer token, returning the principal it names
+        # or nil.
+        #
+        # Returns the whole resolved principal rather than just its Tools,
+        # because what the request may do is decided from the claims the
+        # SIGNATURE covered and from the session those claims named -- the
+        # token's jti, which is the key the credential store filed the session
+        # under. A caller that kept only the Tools would have to re-derive the
+        # identity from somewhere else, and the only other sources are an
+        # unverified decode or a guess.
+        def resolve_bearer_principal(env)
           return nil unless self.class.oauth_enabled?
 
           auth_header = env["HTTP_AUTHORIZATION"]
@@ -1009,13 +1036,84 @@ module Hyperon
           token = auth_header[7..]
           return nil if token == "public-access" # Skip legacy public token
 
-          begin
-            claims = self.class.token_issuer.verify(token)
-            session = self.class.credential_store.get_session(claims["jti"])
-            session&.dig(:tools)
-          rescue Hyperon::Wiki::Mcp::OAuth::TokenIssuer::TokenError
-            nil
-          end
+          claims = verify_access_token(token)
+          return nil unless claims
+
+          session_principal(claims)
+        end
+
+        # nil rather than a raised error: an unverifiable token is simply not a
+        # principal, and the caller's fail-closed gate turns that into a 401.
+        def verify_access_token(token)
+          self.class.token_issuer.verify(token)
+        rescue Hyperon::Wiki::Mcp::OAuth::TokenIssuer::TokenError
+          nil
+        end
+
+        def session_principal(claims)
+          session_id = claims["jti"]
+          session = self.class.credential_store.get_session(session_id)
+          tools = session&.dig(:tools)
+          return nil unless tools
+
+          BearerPrincipal.new(tools: tools, session_id: session_id, verified_claims: claims)
+        end
+
+        # Build the RequestContext one authenticated request runs under, or nil
+        # when no grant backs it.
+        #
+        # The grant is read through THIS principal's own Auth -- the per-user
+        # Tools' client -- so the capture describes the credential this request
+        # will send outbound, not the server's default identity. Nothing else
+        # on the request can be asked: the claims say who is calling, only a
+        # deck read says what they currently hold.
+        #
+        # No required scope is named. Auth#read_grant records the caller's
+        # scope intent and nothing more -- the capture is scope-agnostic, and
+        # the decision is applied later by
+        # GrantReadResult#authorization_valid_now? -- so passing nil states
+        # that this seam makes no scope demand yet rather than inventing one no
+        # policy has chosen.
+        #
+        # Returns nil, not a refusal, when the grant did not verify: this seam
+        # plumbs capture and decides nothing. A consumer reads the ABSENCE of a
+        # context as "nothing was authorized" -- never as permission -- and
+        # refusing the request belongs to whichever slice enforces a scope.
+        #
+        # Runs BEFORE the dispatch lock is taken and outside the dispatch
+        # deadline, deliberately. The budget exists to bound how long the lock
+        # is HELD (see #with_dispatch_deadline), so arming it around this read
+        # would spend the dispatch's budget before the dispatch owned the lock;
+        # a slow read here delays only this request and blocks no other
+        # session.
+        def build_request_context(principal)
+          grant = read_principal_grant(principal)
+          return nil unless grant&.verification_status == :verified && grant.credential_ref
+
+          Hyperon::Wiki::Mcp::RequestContext.new(
+            principal_kind: :authenticated_session,
+            session_id: principal.session_id,
+            verified_inbound_claims: principal.verified_claims,
+            grant_read_result: grant,
+            outbound_credential_ref: grant.credential_ref,
+            grant_source: :deck_verified_token,
+            local_trusted: false,
+            # Per dispatch, not per session: a session serves many requests,
+            # so only a fresh id can tie one grant read to the one request
+            # that acted on it.
+            request_id: SecureRandom.uuid
+          )
+        end
+
+        # A grant read that cannot complete leaves the request with no context,
+        # the same fail-closed answer as one that does not verify. Scoped to
+        # the read alone: construction below is guarded by explicit checks, and
+        # swallowing errors from it would hide a contract bug as a missing
+        # context.
+        def read_principal_grant(principal)
+          principal.tools.client.auth.read_grant(required_scope: nil)
+        rescue StandardError
+          nil
         end
 
         # Build a JWK (JSON Web Key) from an RSA public key
