@@ -32,13 +32,16 @@
 #     is no deadline to refuse an absurd number with -- deliberately, that is
 #     the CLI contract -- so RetryAfter::MAX_SECONDS is what stops a
 #     `Retry-After: 86400` from parking a batch import for a day.
-#   * BOUNDED BY THE DEADLINE, not exempt from it. A Retry-After is spent
-#     through the same gate as any backoff, so one that does not fit in a
-#     server dispatch's budget is REFUSED rather than slept. This is the
-#     assertion that matters most: a peer-supplied delay that could outlive the
-#     dispatch deadline would hold RackApp::DISPATCH_LOCK past the point the
-#     caller has hung up, which is the exact failure the deadline exists to
-#     prevent.
+#   * GATED BY THE DEADLINE, not exempt from it. A Retry-After is admitted
+#     through the same gate as any backoff, so a requested wait that does not
+#     fit a server dispatch's remaining budget is REFUSED rather than slept,
+#     and the attempt after a wait is refused again when the post-sleep recheck
+#     finds nothing left to spend. This is the assertion that matters most: an
+#     unexamined peer-supplied delay is the easiest way to leave
+#     RackApp::DISPATCH_LOCK held long after the caller has hung up. The gate
+#     is cooperative rather than preemptive -- it declines waits and attempts
+#     and cannot cut short a sleep already underway -- so what is pinned here
+#     is the refusal, not a wall-clock guarantee.
 #   * 429 ONLY. 5xx retry timing is existing behavior; a Decko sending
 #     Retry-After with a 503 must not silently lengthen every server-error
 #     chain in the gem.
@@ -122,8 +125,12 @@ RSpec.describe Hyperon::Wiki::Mcp::RetryAfter do
         expect(described_class.parse((instant + 10).httpdate)).to eq(10)
       end
 
-      # Rounding up must not resurrect an elapsed date as a one-second wait:
-      # the zero floor is applied after the rounding, not before it.
+      # The zero floor on a NEGATIVE fractional delta, which is the case
+      # rounding up could plausibly be written to mishandle: an elapsed date
+      # must stay "no extra wait" rather than becoming a one-second one. This
+      # pins that the floor survives alongside the .ceil, not where it sits
+      # relative to it -- max(ceil(x), 0) and ceil(max(x, 0)) agree for every
+      # x, so no example can tell those two orders apart.
       it "still reads a fractionally-past date as no wait at all" do
         allow(Time).to receive(:now).and_return(instant + 0.25)
 

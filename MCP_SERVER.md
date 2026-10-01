@@ -3117,7 +3117,7 @@ client.auth.refresh_token!
    - Explain use case
    - May receive dedicated API key with higher limit
 
-**The client automatically retries with exponential backoff** (1s, 2s, 4s), so most rate limit issues resolve themselves. On a `429` the client also honors a `Retry-After` header when the server sends one, waiting the longer of that value and its own backoff — capped at 30s, and gated by an armed server-dispatch deadline, which refuses a wait that does not fit the remaining budget rather than sleeping it, and refuses the following attempt if the sleep overran. The gate is cooperative: it declines waits and attempts, it cannot cut a sleep short, so an overrunning sleep can still hold the lock briefly past the deadline.
+**The client automatically retries with exponential backoff** (1s, 2s, 4s), so most rate limit issues resolve themselves. On a `429` the client also honors a `Retry-After` header when the server sends one, waiting the longer of that value and its own backoff — capped at 30s, and gated by an armed server-dispatch deadline, which refuses a wait that does not fit the remaining budget rather than sleeping it, and refuses the following attempt when insufficient budget remains after the wait. The gate is cooperative: it declines waits and attempts, it cannot cut a sleep short, so an overrunning sleep can still hold the lock briefly past the deadline.
 
 ### Debug Mode
 

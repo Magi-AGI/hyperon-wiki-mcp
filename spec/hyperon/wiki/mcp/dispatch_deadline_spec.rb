@@ -762,8 +762,9 @@ RSpec.describe Hyperon::Wiki::Mcp::Client, "retry chain under a dispatch deadlin
   end
 
   describe "with a server dispatch deadline armed" do
-    # The headline: the chain stops once the budget is gone instead of running
-    # all four attempts, so the lock is released in bounded time.
+    # The headline: the chain stops admitting retries once the budget is gone
+    # instead of running all four attempts, so the lock is not held for the
+    # full retry schedule.
     it "stops retrying once the budget cannot cover the next backoff" do
       stub_always_failing
 
@@ -838,9 +839,13 @@ RSpec.describe Hyperon::Wiki::Mcp::Client, "retry chain under a dispatch deadlin
     end
 
     # The sleep schedule is a budget-spending concern, so the chain must stop
-    # on the TOTAL rather than on elapsed-per-attempt bookkeeping. This pins
-    # the whole chain's wall-clock cost under the budget it was armed with.
-    it "never spends more wall-clock on backoff than the armed budget" do
+    # on the TOTAL rather than on elapsed-per-attempt bookkeeping. Pinned
+    # against the stubbed clock, where each sleep costs exactly what it asked
+    # for: that models the chain's own accounting, not a wall-clock guarantee.
+    # A sleep that overruns its request spends more than this (see the 10x
+    # overrun below) -- the gate declines the next wait and attempt, it cannot
+    # take time back.
+    it "keeps its modeled backoff spend inside the armed budget" do
       stub_always_failing
 
       started = clock[:now]
