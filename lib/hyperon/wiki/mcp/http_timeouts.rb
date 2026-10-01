@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "http"
+require_relative "dispatch_deadline"
 
 module Hyperon
   module Wiki
@@ -62,7 +63,24 @@ module Hyperon
         #
         # @return [HTTP::Client] a client carrying OUTBOUND's budgets
         def self.client
-          HTTP.timeout(OUTBOUND)
+          HTTP.timeout(effective_budgets)
+        end
+
+        # OUTBOUND, narrowed to whatever a server dispatch has left.
+        #
+        # Unarmed -- every CLI, batch, and stdio caller -- this IS OUTBOUND,
+        # the same object, so nothing outside server dispatch changes. Under
+        # an armed DispatchDeadline each phase is clamped so no single attempt
+        # can outlive the total budget: without that the total would be
+        # advisory, since one 30s read alone already exceeds it and would park
+        # RackApp::DISPATCH_LOCK for twice the budget before anything checked
+        # the clock.
+        #
+        # @return [Hash] per-operation budgets for this call
+        def self.effective_budgets
+          return OUTBOUND unless DispatchDeadline.armed?
+
+          OUTBOUND.transform_values { |seconds| DispatchDeadline.clamp(seconds) }
         end
       end
     end

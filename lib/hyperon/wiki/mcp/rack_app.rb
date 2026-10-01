@@ -1052,15 +1052,17 @@ module Hyperon
           mcp_server = self.class.mcp_server_instance
 
           DISPATCH_LOCK.synchronize do
-            original_context = mcp_server.server_context
-            working_dir = original_context&.dig(:working_directory) || Dir.pwd
-            request_server_context = { magi_tools: per_user_tools, working_directory: working_dir }
-            request_server_context[:request_context] = request_context if request_context
-            begin
-              mcp_server.server_context = request_server_context
-              mcp_server.handle(request_data)
-            ensure
-              mcp_server.server_context = original_context
+            with_dispatch_deadline do
+              original_context = mcp_server.server_context
+              working_dir = original_context&.dig(:working_directory) || Dir.pwd
+              request_server_context = { magi_tools: per_user_tools, working_directory: working_dir }
+              request_server_context[:request_context] = request_context if request_context
+              begin
+                mcp_server.server_context = request_server_context
+                mcp_server.handle(request_data)
+              ensure
+                mcp_server.server_context = original_context
+              end
             end
           end
         end
@@ -1069,7 +1071,28 @@ module Hyperon
         # context. Takes the same lock as every per-user swap, so it can never
         # be served under one.
         def handle_with_default_context(request_data)
-          DISPATCH_LOCK.synchronize { self.class.mcp_server_instance.handle(request_data) }
+          DISPATCH_LOCK.synchronize do
+            with_dispatch_deadline { self.class.mcp_server_instance.handle(request_data) }
+          end
+        end
+
+        # Arm the total outbound budget for the duration of one dispatch.
+        #
+        # INSIDE the lock, not around it. The budget exists to bound how long
+        # the lock is HELD, so it must start when this request owns the lock
+        # rather than when it started queueing -- otherwise a request that
+        # waited behind a slow one would arrive with its budget already spent
+        # and fail without having made a single call.
+        #
+        # This is the ONLY place the deadline is armed, which is what keeps it
+        # server-dispatch-only: the stdio entrypoints and every CLI or batch
+        # caller share the same Client, Auth, and Tools, run no lock, block
+        # nobody, and keep their long-tail retries untouched.
+        #
+        # See DispatchDeadline for why the budget is total rather than
+        # per-attempt, and why 15s.
+        def with_dispatch_deadline(&)
+          Hyperon::Wiki::Mcp::DispatchDeadline.arm(&)
         end
       end
       # rubocop:enable Metrics/ClassLength

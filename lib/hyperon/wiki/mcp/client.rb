@@ -4,6 +4,7 @@ require "http"
 require "json"
 require_relative "config"
 require_relative "auth"
+require_relative "dispatch_deadline"
 require_relative "http_timeouts"
 
 module Hyperon
@@ -305,15 +306,17 @@ module Hyperon
           # Check if we should retry
           if should_retry?(response, retry_count)
             retry_delay = calculate_retry_delay(retry_count)
-            $stderr.puts "Retrying request after #{retry_delay}s (attempt #{retry_count + 1}/3)"
-            sleep(retry_delay)
-            return request(method, path, params: params, json: json, retry_count: retry_count + 1)
+            return retry_or_give_up(response, retry_delay) do
+              $stderr.puts "Retrying request after #{retry_delay}s (attempt #{retry_count + 1}/3)"
+              sleep(retry_delay)
+              request(method, path, params: params, json: json, retry_count: retry_count + 1)
+            end
           end
 
           handle_response(response)
         rescue HTTP::Error => e
           # Retry on network errors
-          if retry_count < 3
+          if retry_count < 3 && DispatchDeadline.room_for?(calculate_retry_delay(retry_count))
             retry_delay = calculate_retry_delay(retry_count)
             $stderr.puts "Network error, retrying after #{retry_delay}s (attempt #{retry_count + 1}/3)"
             sleep(retry_delay)
@@ -321,6 +324,27 @@ module Hyperon
           end
 
           raise APIError, "HTTP request failed: #{e.message}"
+        end
+
+        # Take the retry, or stop because the dispatch budget is spent.
+        #
+        # The budget is consulted BEFORE the backoff sleep, not after: sleeping
+        # the delay out and only then finding nothing left spends lock time to
+        # learn nothing. When no budget is armed -- every CLI, batch, and stdio
+        # caller -- room_for? is always true and this is exactly the retry that
+        # has always run.
+        #
+        # Giving up surfaces the response the server actually sent (the 503,
+        # the 429) through handle_response rather than a synthetic
+        # deadline-specific error: callers already map those, and inventing a
+        # new error class here would make every one of them wrong about a
+        # failure they already handle.
+        def retry_or_give_up(response, retry_delay)
+          return yield if DispatchDeadline.room_for?(retry_delay)
+
+          left = format("%.1f", DispatchDeadline.remaining.to_f)
+          $stderr.puts "Dispatch budget exhausted; not retrying (#{left}s left)"
+          handle_response(response)
         end
 
         # Handle HTTP response and errors
