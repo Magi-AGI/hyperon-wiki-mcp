@@ -42,27 +42,112 @@ RSpec.describe Hyperon::Wiki::Mcp::HttpTimeouts do
     end
   end
 
+  # The TLS correction. OUTBOUND's three values are what http.rb is TOLD, and
+  # PHASE_SPENDS is how many times it actually charges each of them in one
+  # attempt. The gap between those is what made the old bound wrong: a budget
+  # split so the hash summed to 15 still permitted 20s of socket time, because
+  # connect is spent twice against an https endpoint.
+  describe "PHASE_SPENDS" do
+    # The fact being asserted is about http-5.3.1's socket loop:
+    # PerOperation#connect spends @connect_timeout on the TCP handshake and
+    # #connect_ssl spends it AGAIN on the TLS handshake, while #write and
+    # #readpartial each spend theirs once. Every Decko URL is https.
+    it "charges connect twice and the other phases once" do
+      expect(described_class::PHASE_SPENDS).to eq(connect: 2, write: 1, read: 1)
+    end
+
+    it "covers exactly the declared phases, so no budget goes uncounted" do
+      expect(described_class::PHASE_SPENDS.keys).to eq(described_class::OUTBOUND.keys)
+    end
+
+    it "is frozen" do
+      expect(described_class::PHASE_SPENDS).to be_frozen
+    end
+
+    # Guards the gem assumption this arithmetic rests on. If a future http.rb
+    # stopped reusing the connect timeout for TLS -- or started charging write
+    # twice -- the weighting here would silently become wrong, and the only
+    # symptom would be an overshoot nobody is measuring.
+    #
+    # Asserted structurally (which method spends which ivar) rather than by
+    # counting occurrences, so a cosmetic edit upstream does not fail this while
+    # a real change in spending behavior still does.
+    it "matches where http.rb actually spends each timeout" do
+      gem_path = Gem.loaded_specs["http"].full_gem_path
+      source = File.read(File.join(gem_path, "lib/http/timeout/per_operation.rb"))
+
+      # Split the class into method bodies: each chunk runs from one `def` to
+      # the next. Crude, but it is reading one small known file, and it is what
+      # lets each assertion below name a single method rather than the whole
+      # source.
+      bodies = source.split(/^\s*def /).each_with_object({}) do |chunk, found|
+        name = chunk[/\A(\w+)/, 1]
+        found[name] = chunk if name
+      end
+
+      # connect is spent TWICE: once on the TCP handshake, again on TLS.
+      expect(bodies.fetch("connect")).to include("@connect_timeout")
+      expect(bodies.fetch("connect_ssl")).to include("@connect_timeout")
+      # write and read are each spent in exactly one method, and never in the
+      # other's -- so neither is a 2x line item the way connect is.
+      expect(bodies.fetch("write")).to include("@write_timeout")
+      expect(bodies.fetch("write")).not_to include("@read_timeout")
+      expect(bodies.fetch("readpartial")).to include("@read_timeout")
+      expect(bodies.fetch("readpartial")).not_to include("@write_timeout")
+      # And neither connect method touches those, which is what makes connect
+      # the only phase charged more than once.
+      expect(bodies.fetch("connect")).not_to include("@read_timeout")
+      expect(bodies.fetch("connect_ssl")).not_to include("@read_timeout")
+    end
+  end
+
+  describe "WEIGHTED_OUTBOUND_SECONDS" do
+    # 45s, not the 40s the hash sums to: the extra 5 is the TLS handshake.
+    # This is the real cost of one unclamped attempt and the denominator the
+    # allocation scales by.
+    it "is what one unclamped attempt actually spends on an https socket" do
+      expect(described_class::WEIGHTED_OUTBOUND_SECONDS).to eq(45)
+      expect(described_class::WEIGHTED_OUTBOUND_SECONDS).to be > described_class::OUTBOUND.values.sum
+    end
+  end
+
   describe "MIN_PHASE_SECONDS" do
     # http.rb has no sane reading of a zero or negative timeout, so an attempt
     # admitted with a sliver of budget left still needs a positive number per
     # phase. This floor is the ONE documented way an attempt can outlive the
-    # remaining budget, which is only tolerable because it is small and
-    # bounded: at most OUTBOUND.size * this.
+    # remaining budget.
     it "is a positive, finite floor" do
       expect(described_class::MIN_PHASE_SECONDS).to be_a(Numeric)
       expect(described_class::MIN_PHASE_SECONDS).to be > 0
       expect(described_class::MIN_PHASE_SECONDS).to be_finite
     end
+  end
 
-    # If the floors could sum past the budget by much, "total" would stop
-    # meaning anything. Pinning the overshoot keeps that trade visible.
+  describe "MIN_ATTEMPT_SOCKET_SECONDS" do
+    # The worst case a FLOORED attempt spends on the wire, which is the number
+    # the deadline's documented overshoot is stated in. It must count socket
+    # operations, not hash entries: counting entries gave 3s and understated
+    # the floor by exactly the TLS handshake, which is how the overshoot the
+    # docs advertised came to be smaller than the one the code allowed.
+    it "counts the floor once per socket spend, not once per declared phase" do
+      expect(described_class::MIN_ATTEMPT_SOCKET_SECONDS).to eq(4)
+      expect(described_class::MIN_ATTEMPT_SOCKET_SECONDS).to eq(
+        described_class::MIN_PHASE_SECONDS * described_class::PHASE_SPENDS.values.sum
+      )
+    end
+
+    # If the floors could outrun the budget by much, "total" would stop meaning
+    # anything. Pinning the overshoot keeps that trade visible -- and pinning it
+    # against PHASE_SPENDS rather than a literal is what keeps the docs honest
+    # if the weighting ever changes.
     it "bounds the worst-case overshoot of one attempt to a few seconds" do
-      expect(described_class::MIN_PHASE_SECONDS * described_class::OUTBOUND.size).to be <= 3
+      expect(described_class::MIN_ATTEMPT_SOCKET_SECONDS).to be <= 4
+      expect(described_class::MIN_ATTEMPT_SOCKET_SECONDS).to be > described_class::OUTBOUND.size
     end
   end
 
   describe "BudgetExhaustedError" do
-    # Every outbound path in the gem rescues HTTP::Error and maps it to its own
+    # The mapped outbound paths rescue HTTP::Error and turn it into their own
     # failure (APIError, JWKSError, AuthenticationError). A refusal that did not
     # descend from it would escape all three and crash whatever tool was
     # running instead of failing closed.

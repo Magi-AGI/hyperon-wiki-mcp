@@ -37,17 +37,32 @@ module Hyperon
       #     dispatch stops making requests instead of starting one more with a
       #     floor budget. That is what bounds a paginated walk, where the cost
       #     is the NUMBER of requests rather than any one request's timeout.
+      #     The budget is read ONCE per decision, so the refusal and the
+      #     allocation cannot disagree about whether it is still alive.
       #   * No retry is authorized unless the backoff AND the attempt it
       #     authorizes both fit (see #room_for_retry?), and the budget is
       #     re-checked after the backoff sleep actually happens.
-      #   * One attempt's socket budgets sum to at most what the deadline has
-      #     left, except for the MIN_ATTEMPT_SECONDS floor: an attempt that
-      #     starts with a sliver of budget left still gets a positive,
-      #     finite timeout per phase, so a single attempt can overshoot by at
-      #     most OUTBOUND.size * MIN_ATTEMPT_SECONDS (3s today).
+      #   * One attempt's SOCKET SPEND is at most what the deadline has left,
+      #     except for the per-phase floor. Socket spend, not the sum of the
+      #     three timeout values: http.rb charges the connect allowance twice
+      #     against a TLS endpoint (connect, then connect_ssl), so a hash
+      #     summing to 15 could still spend 20s on the wire. HttpTimeouts
+      #     allocates against the weighted cost for that reason.
+      #   * The floor means a single attempt admitted with a sliver of budget
+      #     left can overshoot by at most
+      #     HttpTimeouts::MIN_ATTEMPT_SOCKET_SECONDS -- 4s today, counting the
+      #     TLS handshake, where an earlier version of this comment said 3s by
+      #     counting hash entries instead of socket operations.
       #
-      # So one armed dispatch spends at most its budget plus ~3s of socket
+      # So one armed dispatch spends at most its budget plus ~4s of socket
       # time, versus the ~127s+ it could spend before.
+      #
+      # Where the floor actually bites: scaled allocation stays at or under the
+      # budget on its own down to a ~9s remainder. Below that the floors start
+      # to dominate, and between a ~4s remainder and zero an admitted attempt
+      # is floored to the 4s worst case. That window is bounded and is the
+      # price of never handing a socket a zero timeout, which http.rb cannot
+      # read as "fail fast".
       #
       # WHAT THIS DOES NOT BOUND
       #
@@ -115,7 +130,19 @@ module Hyperon
         # #room_for_retry? charges a retry for the backoff AND for the attempt
         # the backoff exists to make: sleeping 1s to start an attempt that the
         # seam will refuse the instant it begins spends lock time to learn
-        # nothing. This is deliberately NOT a floor handed to a socket --
+        # nothing.
+        #
+        # An ADMISSION HEURISTIC, not the real cost of an attempt. The real
+        # floor cost is HttpTimeouts::MIN_ATTEMPT_SOCKET_SECONDS (4s), and this
+        # is deliberately smaller: requiring 4s of headroom before any retry
+        # would refuse retries that usually succeed in milliseconds, trading a
+        # frequent real failure for a rare bounded overshoot. What this number
+        # buys is the guarantee that an authorized attempt will not be REFUSED
+        # outright -- it does not promise the attempt finishes inside the
+        # budget. The overshoot that remains is the floor window documented
+        # above, and it is bounded by MIN_ATTEMPT_SOCKET_SECONDS.
+        #
+        # This is also NOT a floor handed to a socket --
         # HttpTimeouts::MIN_PHASE_SECONDS is that, and only for an attempt
         # that still has budget left when it starts.
         MIN_ATTEMPT_SECONDS = 1

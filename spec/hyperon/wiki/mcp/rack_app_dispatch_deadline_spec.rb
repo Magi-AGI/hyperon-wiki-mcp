@@ -132,19 +132,111 @@ RSpec.describe Hyperon::Wiki::Mcp::RackApp, "dispatch deadline" do
   # the callers that must stay unbudgeted, and a direct thread_variable_set of
   # DispatchDeadline::VARIABLE is treated as arming too -- it would bypass #arm
   # entirely, including the ensure that disarms it.
-  it "is armed only from RackApp dispatch, so CLI and stdio callers stay unbudgeted" do
+  #
+  # Matched against the whole file with comments stripped rather than line by
+  # line. The earlier line-scoped version required the lowercase literal
+  # `dispatch_deadline` on the SAME line as thread_variable_set, so the
+  # idiomatic form it was added to catch --
+  # `thread_variable_set(DispatchDeadline::VARIABLE, v)` -- slipped past it,
+  # and so did any call split across two lines. A guard its own target evades
+  # is worse than none.
+  #
+  # dispatch_deadline.rb is excluded because it DEFINES the variable: its
+  # private #deadline_at= is the one legitimate writer, and #arm is the only
+  # caller of it, with the ensure that disarms. Everything else writing that
+  # thread variable is bypassing #arm, which is what this guard is for.
+  def self.deadline_owner
+    "lib/hyperon/wiki/mcp/dispatch_deadline.rb"
+  end
+
+  def self.arming_sources
     gem_root = File.expand_path("../../../..", __dir__)
     candidates = Dir.glob("#{gem_root}/lib/**/*.rb") + Dir.glob("#{gem_root}/bin/*")
+    variable = Regexp.escape(Hyperon::Wiki::Mcp::DispatchDeadline::VARIABLE.to_s)
 
     arming = candidates.select { |path| File.file?(path) }.select do |path|
-      code = File.readlines(path, chomp: true).reject { |line| line.strip.start_with?("#") }
-      code.any? do |line|
-        line.match?(/DispatchDeadline\.arm\b/) ||
-          (line.include?("thread_variable_set") && line.include?("dispatch_deadline"))
-      end
+      code = File.readlines(path, chomp: true).reject { |line| line.strip.start_with?("#") }.join("\n")
+
+      code.match?(/DispatchDeadline\.arm\b/) ||
+        # thread_variable_set reaching the deadline's key, however it is spelled
+        # and across however many lines: the constant, the namespaced constant,
+        # or the raw symbol.
+        code.match?(/thread_variable_set\s*\(?\s*(?:[\w:]*DispatchDeadline::)?VARIABLE\b/m) ||
+        code.match?(/thread_variable_set\s*\(?\s*:?#{variable}\b/m)
     end
 
-    expect(arming.map { |path| path.delete_prefix("#{gem_root}/") })
-      .to contain_exactly("lib/hyperon/wiki/mcp/rack_app.rb")
+    arming.map { |path| path.delete_prefix("#{gem_root}/") } - [deadline_owner]
+  end
+
+  it "is armed only from RackApp dispatch, so CLI and stdio callers stay unbudgeted" do
+    expect(self.class.arming_sources).to contain_exactly("lib/hyperon/wiki/mcp/rack_app.rb")
+  end
+
+  # The exclusion must stay narrow: the owner is excluded because it is the
+  # owner, not because the guard cannot see it. If it ever stopped matching,
+  # the guard would have been widened into uselessness without anyone noticing.
+  it "still recognizes the deadline module's own writer, and excludes it deliberately" do
+    gem_root = File.expand_path("../../../..", __dir__)
+    owner = File.read("#{gem_root}/#{self.class.deadline_owner}")
+
+    expect(owner).to match(/thread_variable_set\s*\(?\s*VARIABLE\b/)
+  end
+
+  # The guard tested against itself. Each of these is a real way to arm the
+  # budget outside #arm, and each one the previous guard would have missed.
+  describe "the arming guard itself" do
+    def guard_matches?(code)
+      stripped = code.lines.map(&:chomp).reject { |line| line.strip.start_with?("#") }.join("\n")
+      variable = Regexp.escape(Hyperon::Wiki::Mcp::DispatchDeadline::VARIABLE.to_s)
+
+      stripped.match?(/DispatchDeadline\.arm\b/) ||
+        stripped.match?(/thread_variable_set\s*\(?\s*(?:[\w:]*DispatchDeadline::)?VARIABLE\b/m) ||
+        stripped.match?(/thread_variable_set\s*\(?\s*:?#{variable}\b/m)
+    end
+
+    it "catches DispatchDeadline.arm" do
+      expect(guard_matches?("DispatchDeadline.arm(15) { work }")).to be(true)
+    end
+
+    # The exact form Codex found slipping through: the constant reference.
+    it "catches a thread_variable_set of the namespaced constant" do
+      expect(
+        guard_matches?("Thread.current.thread_variable_set(DispatchDeadline::VARIABLE, value)")
+      ).to be(true)
+    end
+
+    it "catches the fully qualified constant" do
+      expect(
+        guard_matches?(
+          "Thread.current.thread_variable_set(Hyperon::Wiki::Mcp::DispatchDeadline::VARIABLE, v)"
+        )
+      ).to be(true)
+    end
+
+    it "catches the raw symbol" do
+      expect(
+        guard_matches?("Thread.current.thread_variable_set(:hyperon_wiki_mcp_dispatch_deadline, v)")
+      ).to be(true)
+    end
+
+    # The other half of the miss: a call split across lines.
+    it "catches a multiline thread_variable_set" do
+      expect(
+        guard_matches?(<<~RUBY)
+          Thread.current.thread_variable_set(
+            DispatchDeadline::VARIABLE, value
+          )
+        RUBY
+      ).to be(true)
+    end
+
+    # And it must not fire on prose, or nobody keeps it.
+    it "ignores commented-out arming" do
+      expect(guard_matches?("# DispatchDeadline.arm(15) { work }")).to be(false)
+    end
+
+    it "ignores an unrelated thread variable" do
+      expect(guard_matches?("Thread.current.thread_variable_set(:some_other_key, value)")).to be(false)
+    end
   end
 end

@@ -16,12 +16,17 @@
 #     authorizes, re-checking after the sleep actually happens.
 #
 #     Stated as an invariant: no attempt starts on a spent budget, and one
-#     attempt's socket budgets sum to at most what is left, give or take the
-#     MIN_PHASE_SECONDS floor. What is NOT bounded is documented on
-#     DispatchDeadline: a trickling peer defeats any total, because http.rb's
-#     read/write budgets are inactivity windows re-armed per wait.
+#     attempt's SOCKET SPEND is at most what is left, give or take the
+#     MIN_ATTEMPT_SOCKET_SECONDS floor. Socket spend rather than the sum of the
+#     three timeout values, because http.rb charges the connect allowance twice
+#     against a TLS endpoint -- a hash summing to 15 spent 20 on the wire, which
+#     is why these specs weight each budget by PHASE_SPENDS.
 #
-#   * UNARMED (everything else): byte-for-byte the behavior that shipped. The
+#     What is NOT bounded is documented on DispatchDeadline: a trickling peer
+#     defeats any total, because http.rb's read/write budgets are inactivity
+#     windows re-armed per wait.
+#
+#   * UNARMED (everything else): the behavior that shipped, unchanged. The
 #     same Client, Auth, and Tools serve the stdio entrypoints
 #     (bin/mcp-server, bin/hyperon-wiki-mcp, bin/magi-archive-mcp) and every
 #     CLI and batch caller, which take no lock and block nobody. A CLI import
@@ -288,62 +293,93 @@ RSpec.describe Hyperon::Wiki::Mcp::HttpTimeouts, "under a dispatch deadline" do
     )
   end
 
-  # THE invariant, and the one the previous version got wrong. http.rb spends
-  # connect, then write, then read, SEQUENTIALLY, so clamping each phase to
-  # `remaining` independently authorized remaining + connect + write -- 25s of
-  # socket time on a 15s budget, while the docs claimed no attempt could
-  # outlive the total. The budget must be SPLIT, so the sum is what the
-  # deadline bounds.
-  describe "the per-attempt sum" do
+  # THE invariant, and the one the previous two versions got wrong. http.rb
+  # spends connect, then write, then read, SEQUENTIALLY, so clamping each phase
+  # to `remaining` independently authorized remaining + connect + write -- 25s
+  # of socket time on a 15s budget. Splitting fixed that but still counted
+  # HASH ENTRIES: against an https endpoint http.rb charges the connect
+  # allowance TWICE (PerOperation#connect, then #connect_ssl), so {5,5,5}
+  # summed to 15 and spent 20.
+  #
+  # What has to be bounded is SOCKET SPEND, so that is what these specs
+  # measure: every assertion below weights each granted budget by
+  # PHASE_SPENDS rather than adding the three numbers up.
+  describe "the per-attempt socket spend" do
+    # The weighting that makes these assertions mean something. Adding the
+    # hash values is the measurement that let the TLS overshoot through.
+    def socket_spend(budgets)
+      budgets.sum { |phase, seconds| seconds * described_class::PHASE_SPENDS.fetch(phase) }
+    end
+
     it "never exceeds the remaining budget on a fresh deadline" do
       Hyperon::Wiki::Mcp::DispatchDeadline.arm(15) do
         budgets = described_class.effective_budgets
 
-        expect(budgets.values.sum).to be <= 15
-        expect(budgets).to eq(connect: 5, write: 5, read: 5)
+        # Two connects, one write, one read: 1.667*2 + 1.667 + 10 == 15.
+        expect(socket_spend(budgets)).to be_within(0.001).of(15)
+        expect(budgets[:read]).to be_within(0.001).of(10)
+      end
+    end
+
+    # The exact case Codex measured: a 15s budget that the old split allowed to
+    # spend 20s. Pinned as a literal so a regression reads as the same number.
+    it "spends 15s and not 20s of socket time on a fresh 15s budget" do
+      Hyperon::Wiki::Mcp::DispatchDeadline.arm(15) do
+        expect(socket_spend(described_class.effective_budgets)).to be <= 15.001
       end
     end
 
     it "never exceeds the remaining budget once partly spent" do
       Hyperon::Wiki::Mcp::DispatchDeadline.arm(15) do
-        advance(12)
+        advance(6)
 
-        budgets = described_class.effective_budgets
-
-        expect(budgets.values.sum).to be <= 3
-        expect(budgets).to eq(connect: 1, write: 1, read: 1)
+        expect(socket_spend(described_class.effective_budgets)).to be_within(0.001).of(9)
       end
     end
 
     # Swept rather than spot-checked: the bug was an invariant that held at the
-    # values someone happened to assert and failed everywhere else.
+    # values someone happened to assert and failed everywhere else. The sweep is
+    # against socket spend, and the only slack allowed is the floor -- stated as
+    # MIN_ATTEMPT_SOCKET_SECONDS (4s, counting TLS) rather than the 3s an
+    # entry-count gave.
     it "holds across the whole range of remaining budgets" do
-      (1..60).each do |tenths|
+      (1..120).each do |tenths|
         Hyperon::Wiki::Mcp::DispatchDeadline.arm(tenths * 0.5) do
           left = Hyperon::Wiki::Mcp::DispatchDeadline.remaining
           budgets = described_class.effective_budgets
-          floor = described_class::MIN_PHASE_SECONDS * described_class::OUTBOUND.size
 
-          expect(budgets.values.sum).to be <= [left, floor].max + 0.001
+          expect(socket_spend(budgets)).to be <= left + described_class::MIN_ATTEMPT_SOCKET_SECONDS + 0.001
           budgets.each_value { |seconds| expect(seconds).to be >= described_class::MIN_PHASE_SECONDS }
         end
       end
     end
 
-    # An earlier phase must not be able to starve a later one: a 1s read budget
-    # is useless, so the split reserves the floor for every phase still to come.
-    it "reserves the floor for every phase still to come" do
-      Hyperon::Wiki::Mcp::DispatchDeadline.arm(15) do
-        advance(12.5)
-
-        expect(described_class.effective_budgets).to eq(connect: 1, write: 1, read: 1)
+    # Above the weighted cost of a full attempt there is nothing to narrow, so a
+    # generous budget must get OUTBOUND's numbers rather than inflated ones.
+    it "never grants more than the declared budget however much is left" do
+      Hyperon::Wiki::Mcp::DispatchDeadline.arm(600) do
+        expect(described_class.effective_budgets).to eq(described_class::OUTBOUND.to_h)
       end
     end
 
-    it "carries the split budgets onto the client that is actually built" do
+    # Proportional rather than front-to-back. The sequential split gave connect
+    # its full 5s at a 9s remainder and left read with 1s -- a narrowed attempt
+    # that looked nothing like a full one, and starved the phase that actually
+    # needs the time.
+    it "keeps the phases in their declared proportion rather than starving the read" do
+      Hyperon::Wiki::Mcp::DispatchDeadline.arm(9) do
+        budgets = described_class.effective_budgets
+
+        expect(budgets[:read]).to be_within(0.001).of(6)
+        expect(budgets[:read]).to be > budgets[:connect]
+        expect(socket_spend(budgets)).to be_within(0.001).of(9)
+      end
+    end
+
+    it "carries the scaled budgets onto the client that is actually built" do
       Hyperon::Wiki::Mcp::DispatchDeadline.arm(9) do
         expect(described_class.client.default_options.timeout_options).to eq(
-          connect_timeout: 5, write_timeout: 3, read_timeout: 1
+          connect_timeout: 1.0, write_timeout: 1.0, read_timeout: 6.0
         )
       end
     end
@@ -356,6 +392,21 @@ RSpec.describe Hyperon::Wiki::Mcp::HttpTimeouts, "under a dispatch deadline" do
           expect(seconds).to be > 0
           expect(seconds).to be_finite
         end
+      end
+    end
+
+    # The floor window, stated honestly. Below ~4s remaining an admitted attempt
+    # is floored, so it CAN outlive the budget -- but by at most
+    # MIN_ATTEMPT_SOCKET_SECONDS, which is the number the docs now advertise.
+    it "bounds a floored attempt's overshoot by the documented floor" do
+      Hyperon::Wiki::Mcp::DispatchDeadline.arm(15) do
+        advance(14.9)
+        left = Hyperon::Wiki::Mcp::DispatchDeadline.remaining
+        budgets = described_class.effective_budgets
+
+        expect(budgets).to eq(connect: 1, write: 1, read: 1)
+        expect(socket_spend(budgets)).to eq(described_class::MIN_ATTEMPT_SOCKET_SECONDS)
+        expect(socket_spend(budgets) - left).to be <= described_class::MIN_ATTEMPT_SOCKET_SECONDS
       end
     end
   end
@@ -402,6 +453,147 @@ RSpec.describe Hyperon::Wiki::Mcp::HttpTimeouts, "under a dispatch deadline" do
     # would break it.
     it "refuses nothing when no budget is armed" do
       expect { described_class.client }.not_to raise_error
+    end
+  end
+
+  # C2: the time-of-check/time-of-use hole the gate left behind.
+  #
+  # The gate used to read the clock TWICE -- once via .expired?, then again for
+  # .remaining to allocate against -- with nothing making the two reads
+  # coherent. A thread descheduled between them (GC pause, a Puma worker losing
+  # its slice) passed the gate on a live budget and then allocated against a
+  # DEAD one: `left` went negative, every phase floored to MIN_PHASE_SECONDS,
+  # and already-expired work was handed a fresh socket allowance. That is
+  # exactly the behavior the refusal exists to remove, reachable without any
+  # injection under ordinary scheduler pressure.
+  #
+  # The fix is one clock read per decision. These specs drive the clock so the
+  # SECOND read would be fatal, which is what makes them fail against the
+  # two-read version rather than merely pass against the fixed one.
+  describe "when the budget dies between clock reads" do
+    # The precise statement of the defect: the value the gate approved and the
+    # value the allocator spent must be the SAME observation. With two reads
+    # they were not, and the allocator could be handed a negative budget the
+    # gate had never seen -- which floors to {1,1,1} and hands dead work a live
+    # socket allowance.
+    #
+    # The clock here is healthy for arming AND for a second read, then dead
+    # from the third on. Under the two-read version that is exactly fatal:
+    # .expired? sampled the healthy second read and waved it through, then
+    # .remaining sampled the dead third and allocated on -100s. Under one read
+    # the allocator sees the same +0.1s the gate did.
+    it "never allocates against a budget the gate did not approve" do
+      reads = 0
+      allow(Hyperon::Wiki::Mcp::DispatchDeadline).to receive(:now) do
+        reads += 1
+        reads <= 2 ? 1000.0 : 1100.1
+      end
+
+      seen = []
+      allow(described_class).to receive(:phase_budgets).and_wrap_original do |original, left|
+        seen << left
+        original.call(left)
+      end
+
+      Hyperon::Wiki::Mcp::DispatchDeadline.arm(0.1) do
+        described_class.effective_budgets
+      rescue described_class::BudgetExhaustedError
+        nil # refusing is also a correct outcome; allocating on a corpse is not
+      end
+
+      expect(seen).to all(be > 0)
+    end
+
+    # The same invariant one layer out: a client may only be built on a budget
+    # that was observed alive. Under the two-read version this built a working
+    # client on a budget 100s overspent -- Codex completed a real mocked GET
+    # that way.
+    it "builds no client on a budget that was observed dead" do
+      reads = 0
+      allow(Hyperon::Wiki::Mcp::DispatchDeadline).to receive(:now) do
+        reads += 1
+        reads <= 2 ? 1000.0 : 1100.1
+      end
+
+      observed = []
+      allow(described_class).to receive(:phase_budgets).and_wrap_original do |original, left|
+        observed << left
+        original.call(left)
+      end
+
+      Hyperon::Wiki::Mcp::DispatchDeadline.arm(0.1) do
+        described_class.client
+      rescue described_class::BudgetExhaustedError
+        nil
+      end
+
+      expect(observed.reject(&:positive?)).to be_empty
+    end
+
+    # And when the single read IS dead, the refusal happens and nothing is
+    # allocated at all.
+    it "refuses outright when the one clock read is already past the deadline" do
+      reads = 0
+      allow(Hyperon::Wiki::Mcp::DispatchDeadline).to receive(:now) do
+        reads += 1
+        reads <= 1 ? 1000.0 : 1100.1
+      end
+
+      Hyperon::Wiki::Mcp::DispatchDeadline.arm(0.1) do
+        expect { described_class.effective_budgets }.to raise_error(
+          described_class::BudgetExhaustedError, /exhausted 100\.0s ago/
+        )
+      end
+    end
+
+    # The structural guarantee behind all of the above: one read cannot
+    # disagree with itself. Asserted directly, because an implementation that
+    # happened to agree today could silently reintroduce the race tomorrow.
+    it "reads the clock exactly once per decision" do
+      reads = 0
+      allow(Hyperon::Wiki::Mcp::DispatchDeadline).to receive(:now) do
+        reads += 1
+        1000.0
+      end
+
+      Hyperon::Wiki::Mcp::DispatchDeadline.arm(15) do
+        reads = 0
+        described_class.effective_budgets
+
+        expect(reads).to eq(1)
+      end
+    end
+
+    # And the refusal path must be just as frugal: re-reading the clock to
+    # format the error message is the same bug wearing a diagnostic hat.
+    it "reads the clock exactly once when it refuses, too" do
+      reads = 0
+      allow(Hyperon::Wiki::Mcp::DispatchDeadline).to receive(:now) do
+        reads += 1
+        1000.0
+      end
+
+      Hyperon::Wiki::Mcp::DispatchDeadline.arm(-5) do
+        reads = 0
+
+        expect { described_class.effective_budgets }.to raise_error(described_class::BudgetExhaustedError)
+        expect(reads).to eq(1)
+      end
+    end
+
+    # A non-positive allocation input must be REFUSED, not floored. This is the
+    # invariant the race violated, stated without reference to any clock: there
+    # is no budget value at or below zero for which an attempt may start.
+    it "refuses a non-positive budget rather than flooring it to a live allowance" do
+      [0, -0.001, -100].each do |left|
+        Hyperon::Wiki::Mcp::DispatchDeadline.arm(15) do
+          advance(15 - left)
+
+          expect { described_class.effective_budgets }.to raise_error(
+            described_class::BudgetExhaustedError
+          )
+        end
+      end
     end
   end
 
@@ -624,6 +816,54 @@ RSpec.describe Hyperon::Wiki::Mcp::Client, "retry chain under a dispatch deadlin
       expect(slept).to eq([1])
       expect(WebMock).to have_requested(:get, cards_url).times(1)
     end
+
+    # The post-backoff recheck used to ask only "expired?", which is the wrong
+    # question: a chain waking with 0 < remaining < MIN_ATTEMPT_SECONDS is not
+    # expired, so it started an attempt the seam then floored to a 4s socket
+    # allowance -- live-budget overshoot bought for no useful work. The recheck
+    # now asks the same question the pre-check asked.
+    #
+    # 2.5s budget: the pre-check passes (2.5 > 1s backoff + 1s attempt), the
+    # sleep overruns to 2s, and the chain wakes with 0.5s -- positive, so the
+    # old `expired?` recheck waved it through, but below the minimum, so no
+    # attempt worth making fits. This example FAILS against that version.
+    it "stops after a backoff that leaves a positive but sub-minimum remainder" do
+      stub_always_failing
+      allow(client).to receive(:sleep) do |seconds|
+        slept << seconds
+        clock[:now] += 2.0 # the 1s sleep actually took 2s
+      end
+
+      expect do
+        expect do
+          Hyperon::Wiki::Mcp::DispatchDeadline.arm(2.5) { client.get("/cards/Test") }
+        end.to output(/Dispatch budget exhausted after 1s backoff/).to_stderr
+      end.to raise_error(described_class::ServerError)
+
+      expect(slept).to eq([1])
+      # The backoff was authorized and slept; the attempt it was taken for is
+      # abandoned rather than started on 0.5s.
+      expect(WebMock).to have_requested(:get, cards_url).times(1)
+      expect(Hyperon::Wiki::Mcp::DispatchDeadline.armed?).to be(false)
+    end
+
+    # The boundary from the other side: a remainder comfortably above the
+    # minimum still retries, so the stricter recheck has not become a blanket
+    # refusal.
+    it "still makes the attempt when the backoff leaves more than the minimum" do
+      stub_request(:get, cards_url).to_return(
+        { status: 503, body: '{"error":"unavailable"}' },
+        { status: 200, body: '{"name":"Test"}', headers: { "Content-Type" => "application/json" } }
+      )
+
+      result = nil
+      expect do
+        Hyperon::Wiki::Mcp::DispatchDeadline.arm(15) { result = client.get("/cards/Test") }
+      end.to output(/Retrying request after 1s/).to_stderr
+
+      expect(result).to eq("name" => "Test")
+      expect(WebMock).to have_requested(:get, cards_url).times(2)
+    end
   end
 
   # B2's headline case: a dispatch whose cost is the NUMBER of requests, none
@@ -745,6 +985,59 @@ RSpec.describe Hyperon::Wiki::Mcp::Client, "retry chain under a dispatch deadlin
 
       expect { client.get("/cards") }.not_to raise_error
       expect(WebMock).to have_requested(:get, cards_url).times(1)
+    end
+
+    # #health_check and #ping were two of the three originally-unbounded sites,
+    # so the gate has to cover them -- but they are also the two call sites that
+    # do NOT map the refusal. Neither has a `rescue HTTP::Error`, so the raw
+    # BudgetExhaustedError escapes rather than becoming an APIError.
+    #
+    # Asserted as the actual behavior rather than the behavior the docs used to
+    # claim: the refusal is bounded and named (the MCP tool wrapper catches
+    # StandardError), but a caller matching on APIError will not see it, and
+    # pretending otherwise is the kind of overclaim this slice is correcting.
+    describe "health and ping on a spent budget" do
+      let(:health_url) { "https://test.example.com/api/mcp/health" }
+      let(:ping_url) { "https://test.example.com/api/mcp/health/ping" }
+
+      it "refuses a health check without opening a socket" do
+        stub_request(:get, health_url).to_return(status: 200, body: '{"status":"healthy"}')
+
+        Hyperon::Wiki::Mcp::DispatchDeadline.arm(15) do
+          clock[:now] += 20
+
+          expect { client.health_check }.to raise_error(
+            Hyperon::Wiki::Mcp::HttpTimeouts::BudgetExhaustedError
+          )
+        end
+
+        expect(WebMock).not_to have_requested(:get, health_url)
+      end
+
+      it "refuses a ping without opening a socket" do
+        stub_request(:get, ping_url).to_return(status: 200, body: '{"status":"ok"}')
+
+        Hyperon::Wiki::Mcp::DispatchDeadline.arm(15) do
+          clock[:now] += 20
+
+          expect { client.ping }.to raise_error(
+            Hyperon::Wiki::Mcp::HttpTimeouts::BudgetExhaustedError
+          )
+        end
+
+        expect(WebMock).not_to have_requested(:get, ping_url)
+      end
+
+      # The honest scope statement: bounded, but not mapped to APIError the way
+      # #request and #get_raw are. Pinned so the asymmetry stays visible.
+      it "surfaces the refusal unmapped, unlike #request and #get_raw" do
+        Hyperon::Wiki::Mcp::DispatchDeadline.arm(15) do
+          clock[:now] += 20
+
+          expect { client.health_check }.not_to raise_error(described_class::APIError)
+          expect { client.health_check }.to raise_error(StandardError)
+        end
+      end
     end
   end
 

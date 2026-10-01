@@ -356,7 +356,11 @@ module Hyperon
         # for an attempt that cannot run is the same waste one step later.
         # After the sleep, because the pre-check is a prediction -- a real
         # sleep(1) can take rather longer than a second under load, and only
-        # the clock afterwards knows what it actually cost.
+        # the clock afterwards knows what it actually cost. The recheck asks
+        # the same question the pre-check asked (is there an attempt's worth
+        # left?) rather than the weaker "is it expired?": a chain waking with
+        # 0.4s left is not expired, but starting an attempt there buys a
+        # floored socket allowance and no useful work.
         #
         # When no budget is armed -- every CLI, batch, and stdio caller -- both
         # checks are unconditionally true and this is exactly the retry that
@@ -372,7 +376,7 @@ module Hyperon
           $stderr.puts "#{notice} #{retry_delay}s (attempt #{retry_count + 1}/3)"
           sleep(retry_delay)
 
-          return true unless DispatchDeadline.expired?
+          return true if DispatchDeadline.room_for?(DispatchDeadline::MIN_ATTEMPT_SECONDS)
 
           report_refused_retry("after #{retry_delay}s backoff")
           false

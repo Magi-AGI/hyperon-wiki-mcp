@@ -197,7 +197,7 @@ RSpec.describe Hyperon::Wiki::Mcp::Auth do
 
     before { allow(Hyperon::Wiki::Mcp::DispatchDeadline).to receive(:now) { clock[:now] } }
 
-    it "splits the remaining budget across the token fetch's phases" do
+    it "scales the remaining budget across the token fetch's phases" do
       stub_request(:post, auth_url).to_return(
         status: 200,
         body: { "token" => "test-token", "role" => "user", "expires_in" => 3600 }.to_json
@@ -205,7 +205,7 @@ RSpec.describe Hyperon::Wiki::Mcp::Auth do
 
       Hyperon::Wiki::Mcp::DispatchDeadline.arm(9) do
         expect(auth.send(:http_client).default_options.timeout_options).to eq(
-          connect_timeout: 5, write_timeout: 3, read_timeout: 1
+          connect_timeout: 1.0, write_timeout: 1.0, read_timeout: 6.0
         )
         expect(auth.token).to eq("test-token")
       end
