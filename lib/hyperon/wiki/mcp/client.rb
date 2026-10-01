@@ -4,6 +4,7 @@ require "http"
 require "json"
 require_relative "config"
 require_relative "auth"
+require_relative "http_timeouts"
 
 module Hyperon
   module Wiki
@@ -53,6 +54,11 @@ module Hyperon
         class ServerError < APIError; end
 
         attr_reader :config, :auth
+
+        # The timeout policy every outbound call in this class carries, shared
+        # verbatim with Auth. Exposed as a constant so the budgets are
+        # assertable directly rather than by scraping this file's source.
+        HTTP_TIMEOUTS = HttpTimeouts::OUTBOUND
 
         # Initialize client with optional configuration
         #
@@ -124,7 +130,7 @@ module Hyperon
         #   # => { "status" => "healthy", "timestamp" => "2025-12-07T...", "checks" => {...} }
         def health_check
           url = config.url_for("/health")
-          response = HTTP.get(url, ssl_context: ssl_context)
+          response = http_client.get(url, ssl_context: ssl_context)
 
           unless response.status.success?
             raise APIError.new("Health check failed", status: response.code)
@@ -146,7 +152,7 @@ module Hyperon
         #   # => { "status" => "ok", "timestamp" => "2025-12-07T..." }
         def ping
           url = config.url_for("/health/ping")
-          response = HTTP.get(url, ssl_context: ssl_context)
+          response = http_client.get(url, ssl_context: ssl_context)
 
           unless response.status.success?
             raise APIError.new("Ping failed", status: response.code)
@@ -185,8 +191,7 @@ module Hyperon
             "Authorization" => "Bearer #{token}"
           }
 
-          http_client = HTTP.headers(headers)
-          response = http_client.get(url, params: params, ssl_context: ssl_context)
+          response = http_client(headers).get(url, params: params, ssl_context: ssl_context)
 
           # Check for errors but return raw response
           case response.code
@@ -280,19 +285,19 @@ module Hyperon
           # Configure HTTP client with SSL settings and timeouts
           # Timeouts prevent hanging when Decko is slow, returning errors before
           # ChatGPT's ~15s timeout kills the connection (causing nginx 499s)
-          http_client = HTTP.headers(headers).timeout(connect: 5, write: 5, read: 30)
+          bounded = http_client(headers)
 
           response = case method
                      when :get
-                       http_client.get(url, params: params, ssl_context: ssl_context)
+                       bounded.get(url, params: params, ssl_context: ssl_context)
                      when :post
-                       http_client.post(url, json: json, ssl_context: ssl_context)
+                       bounded.post(url, json: json, ssl_context: ssl_context)
                      when :patch
-                       http_client.patch(url, json: json, ssl_context: ssl_context)
+                       bounded.patch(url, json: json, ssl_context: ssl_context)
                      when :put
-                       http_client.put(url, json: json, ssl_context: ssl_context)
+                       bounded.put(url, json: json, ssl_context: ssl_context)
                      when :delete
-                       http_client.delete(url, ssl_context: ssl_context)
+                       bounded.delete(url, ssl_context: ssl_context)
                      else
                        raise ArgumentError, "Unsupported HTTP method: #{method}"
                      end
@@ -412,6 +417,22 @@ module Hyperon
             ctx.verify_mode = OpenSSL::SSL::VERIFY_NONE
             ctx
           end
+        end
+
+        # Timeout-bounded HTTP client for this class's outbound calls.
+        #
+        # Every outbound call here goes through this rather than touching HTTP
+        # directly. `HTTP.get(url)` reads as perfectly ordinary but carries NO
+        # timeout, which is how #health_check, #ping, and #get_raw each ended
+        # up unbounded while #request beside them was bounded; routing them all
+        # through one builder is what keeps that from recurring.
+        #
+        # @param headers [Hash, nil] request headers, or nil for an
+        #   unauthenticated call (#health_check and #ping hit public endpoints)
+        # @return [HTTP::Client] a client carrying HTTP_TIMEOUTS' budgets
+        def http_client(headers = nil)
+          client = HttpTimeouts.client
+          headers ? client.headers(headers) : client
         end
       end
     end

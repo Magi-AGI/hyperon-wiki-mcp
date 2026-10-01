@@ -4,6 +4,8 @@ require "spec_helper"
 require "webmock/rspec"
 require "hyperon/wiki/mcp/config"
 require "hyperon/wiki/mcp/auth"
+require "hyperon/wiki/mcp/client"
+require "hyperon/wiki/mcp/http_timeouts"
 
 # Auth's outbound calls -- the JWKS fetch and the token fetch -- must carry
 # explicit per-operation timeouts.
@@ -52,15 +54,20 @@ RSpec.describe Hyperon::Wiki::Mcp::Auth do
       expect(described_class::HTTP_TIMEOUTS).to be_frozen
     end
 
-    # Parity with Client#request is deliberate: one documented timeout policy
-    # for all outbound Decko traffic rather than a second auth-only budget
-    # that drifts.
-    it "matches the budgets Client#request already applies" do
-      client_source = File.read(
-        File.expand_path("../../../../lib/hyperon/wiki/mcp/client.rb", __dir__)
-      )
+    # Parity with Client is deliberate: one documented timeout policy for all
+    # outbound Decko traffic rather than a second auth-only budget that drifts.
+    #
+    # Asserted as object identity against the shared policy, not by scraping
+    # Client's source for a literal. The old string-scrape could only ever
+    # prove the two files SPELL the same numbers, and would pass just as
+    # happily if Client stopped applying them; identity proves there is only
+    # one policy object to begin with.
+    it "is the shared outbound policy, not a second copy of it" do
+      expect(described_class::HTTP_TIMEOUTS).to be(Hyperon::Wiki::Mcp::HttpTimeouts::OUTBOUND)
+    end
 
-      expect(client_source).to include("timeout(connect: 5, write: 5, read: 30)")
+    it "is the same policy object Client applies" do
+      expect(described_class::HTTP_TIMEOUTS).to be(Hyperon::Wiki::Mcp::Client::HTTP_TIMEOUTS)
     end
   end
 

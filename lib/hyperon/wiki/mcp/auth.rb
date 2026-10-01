@@ -6,6 +6,7 @@ require "json"
 require "time"
 require "base64"
 require "openssl"
+require_relative "http_timeouts"
 
 module Hyperon
   module Wiki
@@ -47,23 +48,16 @@ module Hyperon
         # Per-operation timeouts for this class's outbound calls -- the JWKS
         # fetch and the token fetch.
         #
-        # Without these, http.rb applies NO timeout at all: a Decko socket
-        # that accepts the connection and then never answers blocks the
-        # calling thread forever. Both calls are reachable from inside
-        # RackApp::DISPATCH_LOCK (tool dispatch -> Client#request ->
-        # Auth#token -> #fetch_token, and the verification path ->
-        # #fetch_jwks), and that lock serializes EVERY MCP dispatch. So one
-        # hung auth socket is not a slow request, it is a stalled server: no
-        # other session's dispatch can acquire the lock to make progress, and
-        # nothing ever releases it.
-        #
-        # Values deliberately match Client#request's existing
-        # `timeout(connect: 5, write: 5, read: 30)` rather than inventing a
-        # tighter auth-specific budget. Parity keeps one documented timeout
-        # policy for all outbound Decko traffic; picking something shorter
-        # here would silently start failing deployments whose auth endpoint is
-        # slow but working, which is a policy change and not this fix.
-        HTTP_TIMEOUTS = { connect: 5, write: 5, read: 30 }.freeze
+        # Not a second budget: this IS HttpTimeouts::OUTBOUND, the one policy
+        # shared with Client, kept reachable under the name callers and specs
+        # already use. Aliasing rather than redeclaring is the point -- two
+        # literal copies of the same three numbers can drift, and the parity
+        # between Auth and Client could then only be checked by scraping one
+        # file's source from the other's spec. See HttpTimeouts for why the
+        # bound exists at all (unbounded http.rb + RackApp::DISPATCH_LOCK =
+        # one hung socket stalls every session) and why these values are not
+        # tightened.
+        HTTP_TIMEOUTS = HttpTimeouts::OUTBOUND
 
         # Captured-credential fields for a grant read that never got a token.
         NO_CAPTURED_CREDENTIAL = {
@@ -691,20 +685,14 @@ module Hyperon
 
         # Timeout-bounded HTTP client for this class's outbound calls.
         #
-        # Built per call rather than memoized: HTTP::Client carries
-        # per-connection state, and #fetch_jwks and #fetch_token are reachable
-        # concurrently (two sessions, or a verification path racing a refresh),
-        # so a shared instance would be cross-thread mutable state for no gain
-        # -- `HTTP.timeout` only branches an options object.
-        #
-        # Callers need no new rescue: HTTP::TimeoutError and
-        # HTTP::ConnectTimeoutError both descend from HTTP::Error, so an
-        # expired budget already surfaces through the existing
-        # `rescue HTTP::Error` as JWKSError / AuthenticationError -- a timeout
-        # fails closed like any other transport failure instead of escaping as
-        # an unmapped error class.
+        # Delegates to the shared policy rather than applying its own, so Auth
+        # cannot be left bounded differently from Client. See
+        # HttpTimeouts.client for why it is built per call rather than
+        # memoized, and why callers need no new rescue clause -- an expired
+        # budget descends from HTTP::Error and so already surfaces as
+        # JWKSError / AuthenticationError.
         def http_client
-          HTTP.timeout(HTTP_TIMEOUTS)
+          HttpTimeouts.client
         end
       end
       # rubocop:enable Metrics/ClassLength
