@@ -205,7 +205,8 @@ module Hyperon
 
         # Get current valid token, fetching new one if needed
         #
-        # @return [String] the JWT token
+        # @return [String] the JWT token -- frozen, since it is the cached
+        #   credential itself
         # @raise [AuthenticationError] if token fetch fails
         def token
           return @token if token_valid?
@@ -593,7 +594,12 @@ module Hyperon
           # deadline. A cache-only grant reading that pair is authorized
           # until a deadline that was never its credential's own. The return
           # value comes from the local for the same reason.
-          fetched_token = data["token"]
+          #
+          # The token is published as an owned, frozen copy for the same
+          # reason on the reader's side: #token hands callers this very
+          # object, and one rewritten in place -- token A into token B --
+          # would leave A's deadline cached beside B.
+          fetched_token = data["token"].dup.freeze
           @username = data["username"] # Store Decko username from auth response
           @resolved_role = data["role"] # Store role as determined by Decko
           expires_in = data["expires_in"] || 3600

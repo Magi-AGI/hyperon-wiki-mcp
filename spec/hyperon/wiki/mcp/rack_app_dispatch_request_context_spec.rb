@@ -1,40 +1,38 @@
 # frozen_string_literal: true
 
-# Phase 6 RED spec -- the per-request dispatch context must CARRY the
-# request's Hyperon::Wiki::Mcp::RequestContext.
+# How RackApp dispatch swaps, carries, and restores the shared MCP::Server's
+# context around each mcp_server.handle(...).
 #
-# Seam: RackApp#handle_with_user_tools (private), today the only place an
-# authenticated request's context is swapped onto the shared MCP::Server
-# before mcp_server.handle(...) dispatches it. Catalog filtering,
+# The server's context is shared mutable state. For an authenticated request,
+# RackApp#handle_with_user_tools (private) swaps it to that request's
+# per-user Tools -- and, when the caller supplies one, the request's
+# Hyperon::Wiki::Mcp::RequestContext -- for the duration of handle(...), and
+# every tool call reads its identity from it. Catalog filtering,
 # Registry.gate! and AtomSpace invocation can consume Phase 6 authorization
-# only through the context a tool receives at dispatch, and today that
-# context holds just :magi_tools and :working_directory. The key check below
-# is therefore expected to FAIL against current lib/ -- that failure is the
-# intended RED, and this file must not drive a lib/ change as part of this
-# authoring step.
-#
-# Contract encoded -- carry, don't build:
-#   * handle_with_user_tools takes the caller's RequestContext as a
-#     `request_context:` keyword and installs THAT object (not a copy, not one
-#     rebuilt here) as server_context[:request_context] for the duration of
-#     handle(...), beside the unchanged :magi_tools and :working_directory.
-#   * The server's own context is restored afterward, untouched, so the
-#     carried context does not outlive its request.
-# Building the RequestContext -- bearer claims, Auth#read_grant, session
-# identity -- belongs upstream in the transport path and is out of scope here,
-# as are catalog filtering, gating, JWT issuance, and server-context
-# synchronization.
+# only through that context, so this file pins what they will rely on:
+#   * carry, don't build: the caller's RequestContext is installed as
+#     server_context[:request_context] -- that object, not a copy or one
+#     rebuilt here -- beside the unchanged :magi_tools and :working_directory;
+#   * always restore: the server's own context comes back untouched
+#     afterward, INCLUDING when handle(...) raises. The outer handler turns
+#     that error into a 500 and keeps serving, so a skipped restore would hand
+#     the next request this one's tools and RequestContext;
+#   * never observed mid-swap: a default-identity (trusted same-box) request
+#     arriving while a per-user swap is in flight must not run under it.
+# Building the RequestContext (bearer claims, Auth#read_grant, session
+# identity) belongs upstream in the transport path and is out of scope here,
+# as are catalog filtering, gating, and JWT issuance.
 #
 # Local and offline: a real Auth::GrantReadResult and Auth::CredentialRef
-# built directly (no JWKS, no Decko, no OAuth flow), a verifying double for
-# the per-user Tools, and a stateful MCP::Server double that records the
-# context handle(...) actually ran under.
+# built directly (no JWKS, no Decko, no OAuth flow), verifying doubles for
+# the Tools, and a stateful MCP::Server double that records the context each
+# handle(...) actually ran under.
 
 require "spec_helper"
 require "hyperon/wiki/mcp"
 require "hyperon/wiki/mcp/rack_app"
 
-RSpec.describe Hyperon::Wiki::Mcp::RackApp, "dispatch context carries the RequestContext" do
+RSpec.describe Hyperon::Wiki::Mcp::RackApp, "dispatch context" do
   let(:app) { described_class.new }
   let(:mcp_server) { instance_double("MCP::Server") }
   let(:request_data) { { jsonrpc: "2.0", id: 1, method: "tools/list" } }
@@ -94,25 +92,8 @@ RSpec.describe Hyperon::Wiki::Mcp::RackApp, "dispatch context carries the Reques
     described_class.mcp_server_instance = mcp_server
   end
 
-  # Transitional RED device -- delete the fallback branch with the GREEN
-  # change. Passing request_context: to today's two-argument method raises
-  # ArgumentError before handle(...) ever runs, a RED that says nothing about
-  # the context a tool sees. Until the seam accepts the keyword, the current
-  # signature is called instead, so the failure lands on the context itself.
-  # The fallback cannot pass: the example requires the exact object passed
-  # here, and the fallback never hands it over.
   def dispatch_with_user_tools
-    if seam_accepts_request_context?
-      app.send(:handle_with_user_tools, request_data, per_user_tools, request_context: request_context)
-    else
-      app.send(:handle_with_user_tools, request_data, per_user_tools)
-    end
-  end
-
-  def seam_accepts_request_context?
-    app.method(:handle_with_user_tools).parameters.any? do |kind, name|
-      %i[key keyreq].include?(kind) && name == :request_context
-    end
+    app.send(:handle_with_user_tools, request_data, per_user_tools, request_context: request_context)
   end
 
   it "installs the caller's authenticated-session RequestContext in the swapped server_context " \
@@ -127,5 +108,114 @@ RSpec.describe Hyperon::Wiki::Mcp::RackApp, "dispatch context carries the Reques
       .and have_attributes(principal_kind: :authenticated_session, grant_source: :deck_verified_token,
                            local_trusted: false, outbound_credential_ref: credential_ref)
     expect(server_state[:installed]).to equal(server_own_context)
+  end
+
+  it "restores the server's own context when handle(...) raises, so the next request cannot " \
+     "inherit this one's tools or RequestContext" do
+    allow(mcp_server).to receive(:handle) do |_request_data|
+      server_state[:during_handle] = server_state[:installed]
+      raise "tool exploded mid-dispatch"
+    end
+
+    expect { dispatch_with_user_tools }.to raise_error(RuntimeError, "tool exploded mid-dispatch")
+
+    # The swap really happened, so the restore below is not vacuous.
+    expect(server_state[:during_handle]).to include(request_context: request_context)
+    expect(server_state[:installed]).to equal(server_own_context)
+  end
+
+  context "when a default-identity request arrives while a per-user dispatch is in flight" do
+    # A trusted same-box caller: localhost origin plus the shared secret and
+    # no bearer token, so it is served under the server's own context.
+    let(:trusted_local_env) do
+      {
+        "REQUEST_METHOD" => "POST",
+        "PATH_INFO" => "/",
+        "HTTP_HOST" => "127.0.0.1:3002",
+        "HTTP_X_MCP_LOCAL" => local_secret,
+        "CONTENT_TYPE" => "application/json",
+        "rack.input" => StringIO.new('{"jsonrpc":"2.0","id":2,"method":"tools/list"}')
+      }
+    end
+
+    def local_secret
+      "spec-local-secret"
+    end
+
+    # OAuth off, so the default path is reached through the trusted-local
+    # branch alone; the class-level settings are restored afterward.
+    around do |example|
+      oauth_attrs = %i[token_issuer credential_store client_cards]
+      saved_oauth = oauth_attrs.to_h { |attr| [attr, described_class.public_send(attr)] }
+      saved_secret = ENV.fetch("MCP_LOCAL_SECRET", nil)
+      oauth_attrs.each { |attr| described_class.public_send(:"#{attr}=", nil) }
+      ENV["MCP_LOCAL_SECRET"] = local_secret
+      example.run
+    ensure
+      saved_oauth&.each { |attr, value| described_class.public_send(:"#{attr}=", value) }
+      if saved_secret
+        ENV["MCP_LOCAL_SECRET"] = saved_secret
+      else
+        ENV.delete("MCP_LOCAL_SECRET")
+      end
+    end
+
+    # Parked waiting to take a lock -- the way a serialized dispatch keeps a
+    # request out without running it. Thread#status alone cannot say so: it
+    # also reads "sleep" while a thread sits in any GVL-releasing call (the
+    # session id's random bytes, say), which let an earlier revision of this
+    # example release the swap before the default request got anywhere near
+    # handle(...) and pass vacuously against the unserialized dispatch.
+    def parked_on_lock?(thread)
+      thread.status == "sleep" && thread.backtrace.to_a.first.to_s.match?(/Mutex#|Monitor#|synchroniz/)
+    end
+
+    # Deterministic, not timed: the per-user handle(...) is held open on a
+    # queue until the default request has either been served or is parked on
+    # a lock, and only then released. Nothing asserts HOW the default request
+    # is kept out (a shared lock, or no shared mutable context at all), only
+    # that it is never served under another request's swap.
+    it "never serves it under the per-user tools or RequestContext, only under the server's " \
+       "own context" do
+      rack_app = app
+      env = trusted_local_env
+      per_user_swapped = Queue.new
+      release_per_user = Queue.new
+      default_served = Queue.new
+      default_ran_under = nil
+      per_user_thread = nil
+      default_thread = nil
+
+      allow(mcp_server).to receive(:handle) do |incoming|
+        if incoming[:id] == 2
+          default_ran_under = server_state[:installed]
+          default_served << :served
+        else
+          per_user_swapped << :swapped
+          release_per_user.pop(timeout: 5)
+        end
+        { jsonrpc: "2.0", id: incoming[:id], result: { tools: [] } }
+      end
+
+      per_user_thread = Thread.new { dispatch_with_user_tools }
+      expect(per_user_swapped.pop(timeout: 5)).to eq(:swapped)
+
+      default_thread = Thread.new { rack_app.call(env) }
+      deadline = Time.now + 5
+      until default_served.size.positive? || parked_on_lock?(default_thread) ||
+            !default_thread.alive? || Time.now > deadline
+        Thread.pass
+      end
+
+      release_per_user << :released
+      status, = default_thread.value
+      per_user_thread.value
+
+      expect(status).to eq(200)
+      expect(default_ran_under).to equal(server_own_context)
+    ensure
+      release_per_user&.push(:released)
+      [per_user_thread, default_thread].compact.each { |thread| thread.join(5) || thread.kill }
+    end
   end
 end

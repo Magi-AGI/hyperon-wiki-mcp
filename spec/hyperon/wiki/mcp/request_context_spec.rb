@@ -384,4 +384,68 @@ RSpec.describe "Hyperon::Wiki::Mcp::RequestContext" do
       end.to raise_error(ArgumentError)
     end
   end
+
+  # Codex review: authenticated_session is documented as backed by a
+  # VERIFIED deck grant and bound to the credential that grant captured, but
+  # the constructor checked only session identity and credential equality. A
+  # :not_applicable read with no credential satisfies nil == nil, and a
+  # :verification_failed read still carries the credential it captured -- so
+  # either could stand behind an authenticated-looking context that no
+  # verified grant backs. Each message match pins WHICH rule rejects.
+  describe "authenticated-session grant strictness" do
+    it "rejects an authenticated_session whose grant read never consulted Deck and captured " \
+       "no credential" do
+      # Two keys move together on purpose: a nil grant credential beside the
+      # baseline's non-nil outbound credential would trip the credential-
+      # binding rule instead, so the pair is kept self-consistent and only
+      # the verified-grant rule can reject it.
+      not_applicable_grant = synthetic_grant_result(
+        verification_status: :not_applicable, grant_scopes: [], credential_ref: nil
+      )
+
+      expect do
+        described_class.new(**valid_authenticated_attrs(
+          grant_read_result: not_applicable_grant, outbound_credential_ref: nil, request_id: "req-0023"
+        ))
+      end.to raise_error(ArgumentError, /requires a verified grant/)
+    end
+
+    it "rejects an authenticated_session whose not-applicable grant carries the matching credential" do
+      not_applicable_grant = synthetic_grant_result(
+        verification_status: :not_applicable, grant_scopes: [], credential_ref: "cred-abc"
+      )
+
+      expect do
+        described_class.new(**valid_authenticated_attrs(
+          grant_read_result: not_applicable_grant, request_id: "req-0024"
+        ))
+      end.to raise_error(ArgumentError, /requires a verified grant/)
+    end
+
+    it "rejects an authenticated_session whose grant failed verification, even though its " \
+       "outbound credential matches the credential that read captured" do
+      failed_grant = synthetic_grant_result(
+        verification_status: :verification_failed, grant_scopes: nil, credential_ref: "cred-abc"
+      )
+
+      expect do
+        described_class.new(**valid_authenticated_attrs(
+          grant_read_result: failed_grant, request_id: "req-0025"
+        ))
+      end.to raise_error(ArgumentError, /requires a verified grant/)
+    end
+
+    it "rejects an authenticated_session whose verified grant captured no credential" do
+      # The credential pair moves together for the same reason as above.
+      uncredentialed_grant = synthetic_grant_result(
+        verification_status: :verified, grant_scopes: %w[mcp:atomspace:read], credential_ref: nil
+      )
+
+      expect do
+        described_class.new(**valid_authenticated_attrs(
+          grant_read_result: uncredentialed_grant, outbound_credential_ref: nil, request_id: "req-0026"
+        ))
+      end.to raise_error(ArgumentError, /requires the credential its verified grant captured/)
+    end
+  end
 end

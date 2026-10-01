@@ -27,6 +27,11 @@ module Hyperon
       # Every mismatch between those shapes raises ArgumentError at
       # construction: an invalid context must not exist at all, rather than
       # exist and be checked for validity later.
+      #
+      # Neither shape is itself an authorization decision. A verified grant
+      # can still lack the scope a call needs, or be read past its deadline,
+      # so consumers ask grant_read_result.authorization_valid_now? -- never
+      # principal_kind or grant_source.
       class RequestContext
         PRINCIPAL_KINDS = %i[authenticated_session trusted_local].freeze
 
@@ -145,11 +150,30 @@ module Hyperon
 
         def validate_principal_shape!
           if principal_kind == :authenticated_session
-            raise ArgumentError, "authenticated_session requires a session_id" if session_id.nil?
-            raise ArgumentError, "authenticated_session cannot be local_trusted" unless local_trusted == false
+            validate_authenticated_session_shape!
           else
             validate_trusted_local_shape!
           end
+        end
+
+        # A session identity backed by a VERIFIED deck grant and bound to the
+        # credential that read captured -- not merely a session id beside two
+        # credential references that happen to agree. A :not_applicable read
+        # with no credential satisfies nil == nil, and a :verification_failed
+        # read still carries the credential it captured, so neither the
+        # binding check nor the grant-source marker can stand in for
+        # verification.
+        def validate_authenticated_session_shape!
+          raise ArgumentError, "authenticated_session requires a session_id" if session_id.nil?
+          raise ArgumentError, "authenticated_session cannot be local_trusted" unless local_trusted == false
+
+          status = grant_read_result.verification_status
+          unless status == :verified
+            raise ArgumentError, "authenticated_session requires a verified grant, got #{status.inspect}"
+          end
+          return if grant_read_result.credential_ref
+
+          raise ArgumentError, "authenticated_session requires the credential its verified grant captured"
         end
 
         def validate_trusted_local_shape!

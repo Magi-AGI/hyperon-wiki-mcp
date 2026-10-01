@@ -907,6 +907,33 @@ RSpec.describe Hyperon::Wiki::Mcp::Auth do
       end
     end
 
+    context "immutability of the cached credential" do
+      # Codex review: #token used to hand back the very string object Auth
+      # caches beside that token's deadline. Rewriting it in place -- token A
+      # into token B -- left A's deadline cached next to B, and a B that
+      # verifies without a signed exp would then be authorized :cache_only
+      # until a deadline that was never its own.
+      it "hands out the cached token frozen, so a caller cannot rewrite it into another " \
+         "credential that inherits the cached deadline" do
+        token_a = sign(base_payload)
+        token_b = sign(base_payload.except("exp").merge("jti" => "spec-jti-rewritten"))
+        stub_auth_success(token_a, expires_in: 3600)
+        stub_jwks({ "keys" => [jwk_for(signing_key, key_id: kid)] })
+
+        cached = auth.token
+
+        expect(cached).to eq(token_a)
+        expect(cached).to be_frozen
+        expect { cached.replace(token_b) }.to raise_error(FrozenError)
+
+        result = auth.read_grant(required_scope: "mcp:atomspace:read", now: Time.now)
+
+        expect(result.credential_ref.captured_token).to eq(token_a)
+        expect(result.signed_exp_status).to eq(:present_numeric)
+        expect(result.authorization_bound_kind).to eq(:signed_exp)
+      end
+    end
+
     context "immutability of the captured grant" do
       # Codex G3: freezing the scopes ARRAY leaves its strings writable.
       # Rewriting one in place after the read changes what

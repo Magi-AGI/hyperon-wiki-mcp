@@ -132,6 +132,15 @@ module Hyperon
         # Cached health response TTL (seconds)
         HEALTH_CACHE_TTL = 30
 
+        # One lock for every #handle on the shared MCP::Server. Its context is
+        # shared mutable state: a per-user dispatch swaps it for the duration
+        # of that request, so any #handle running alongside -- per-user or
+        # default identity -- would otherwise be served under another
+        # request's tools and RequestContext. Created eagerly, because a
+        # lazily assigned `@mutex ||= Mutex.new` can hand two first requests
+        # two different locks.
+        DISPATCH_LOCK = Mutex.new
+
         class << self
           attr_accessor :mcp_server_instance, :token_issuer, :credential_store, :client_cards, :rate_limiter
 
@@ -596,7 +605,7 @@ module Hyperon
             response = if per_user_tools
                          handle_with_user_tools(request_data, per_user_tools)
                        else
-                         self.class.mcp_server_instance.handle(request_data)
+                         handle_with_default_context(request_data)
                        end
 
             headers = add_mcp_headers({ "Content-Type" => "application/json" }, session_id)
@@ -1035,21 +1044,32 @@ module Hyperon
         # A caller-supplied RequestContext is carried in the swapped context
         # as-is and dropped with it on restore; without one, the key is
         # omitted rather than set to nil.
+        #
+        # The server's own context is restored even when handle raises: the
+        # caller turns that error into a 500 and keeps serving, so a skipped
+        # restore would hand the next request this one's tools and context.
         def handle_with_user_tools(request_data, per_user_tools, request_context: nil)
           mcp_server = self.class.mcp_server_instance
 
-          # Thread-safe: swap server_context for this request
-          @request_mutex ||= Mutex.new
-          @request_mutex.synchronize do
+          DISPATCH_LOCK.synchronize do
             original_context = mcp_server.server_context
             working_dir = original_context&.dig(:working_directory) || Dir.pwd
             request_server_context = { magi_tools: per_user_tools, working_directory: working_dir }
             request_server_context[:request_context] = request_context if request_context
-            mcp_server.server_context = request_server_context
-            response = mcp_server.handle(request_data)
-            mcp_server.server_context = original_context
-            response
+            begin
+              mcp_server.server_context = request_server_context
+              mcp_server.handle(request_data)
+            ensure
+              mcp_server.server_context = original_context
+            end
           end
+        end
+
+        # Handle MCP request under the server's own (default-identity)
+        # context. Takes the same lock as every per-user swap, so it can never
+        # be served under one.
+        def handle_with_default_context(request_data)
+          DISPATCH_LOCK.synchronize { self.class.mcp_server_instance.handle(request_data) }
         end
       end
       # rubocop:enable Metrics/ClassLength
