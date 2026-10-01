@@ -6,6 +6,7 @@ require_relative "config"
 require_relative "auth"
 require_relative "dispatch_deadline"
 require_relative "http_timeouts"
+require_relative "retry_after"
 
 module Hyperon
   module Wiki
@@ -287,8 +288,7 @@ module Hyperon
         def request(method, path, params: nil, json: nil, retry_count: 0)
           response = dispatch(method, path, params: params, json: json)
 
-          if should_retry?(response, retry_count) &&
-             retry_after_backoff?(calculate_retry_delay(retry_count), retry_count, notice: "Retrying request after")
+          if should_retry?(response, retry_count) && retry_authorized?(response, retry_count)
             return request(method, path, params: params, json: json, retry_count: retry_count + 1)
           end
 
@@ -344,6 +344,21 @@ module Hyperon
           retry_count < 3
         end
 
+        # Whether the next attempt against this response is authorized, taking
+        # whatever backoff that decision requires.
+        #
+        # The delay is the exponential backoff, lengthened if the server asked
+        # for longer via Retry-After. RetryAfter.delay only ever returns the
+        # MAXIMUM of the two, so honoring the header cannot make any existing
+        # retry more aggressive and a response without it keeps the identical
+        # 1s/2s/4s schedule. The resulting number is then gated by exactly the
+        # same budget checks as any other backoff -- see #retry_after_backoff?
+        # -- so a peer-chosen wait cannot outlive a server dispatch.
+        def retry_authorized?(response, retry_count)
+          delay = RetryAfter.delay(response, default: calculate_retry_delay(retry_count))
+          retry_after_backoff?(delay, retry_count, notice: "Retrying request after")
+        end
+
         # Sleep the backoff if the dispatch budget can pay for the retry, and
         # answer whether the next attempt may be made. Sleeps as a side effect
         # -- the question and the waiting are one decision, since the budget
@@ -365,6 +380,14 @@ module Hyperon
         # When no budget is armed -- every CLI, batch, and stdio caller -- both
         # checks are unconditionally true and this is exactly the retry that
         # has always run, same message, same delay.
+        #
+        # The delay is a PARAMETER, not this method's business. On the response
+        # path it may be longer than the exponential backoff because the server
+        # sent Retry-After (see RetryAfter.delay), and both gates apply to that
+        # number unchanged: a 20s Retry-After inside a 15s dispatch fails
+        # #room_for_retry? and is REFUSED rather than slept, which is how a
+        # peer-chosen wait is kept from outliving the deadline the lock depends
+        # on.
         #
         # @return [Boolean] true when the caller should make the next attempt
         def retry_after_backoff?(retry_delay, retry_count, notice:)
@@ -494,7 +517,12 @@ module Hyperon
           response.code == 429 || response.code >= 500
         end
 
-        # Calculate exponential backoff delay
+        # The DEFAULT backoff for the Nth retry, before any Retry-After the
+        # server may have asked for.
+        #
+        # This stays the floor under every wait: RetryAfter.delay only ever
+        # takes the maximum of this and a capped Retry-After, so the schedule
+        # below is what a response without the header gets, unchanged.
         def calculate_retry_delay(retry_count)
           # Exponential backoff: 1s, 2s, 4s
           2**retry_count

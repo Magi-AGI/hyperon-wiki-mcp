@@ -3117,7 +3117,7 @@ client.auth.refresh_token!
    - Explain use case
    - May receive dedicated API key with higher limit
 
-**The client automatically retries with exponential backoff**, so most rate limit issues resolve themselves.
+**The client automatically retries with exponential backoff** (1s, 2s, 4s), so most rate limit issues resolve themselves. On a `429` the client also honors a `Retry-After` header when the server sends one, waiting the longer of that value and its own backoff — capped at 30s, and never past an armed server-dispatch deadline, which refuses a wait it cannot afford rather than sleeping it.
 
 ### Debug Mode
 

@@ -10,12 +10,15 @@ module Hyperon
       #
       # HttpTimeouts bounds each outbound ATTEMPT (connect 5s, write 5s, read
       # 30s). Client#request then retries up to three times on 429/5xx and on
-      # transport errors, sleeping 1s, 2s, then 4s between them. Four bounded
-      # attempts chained together are not bounded by any one attempt's budget:
-      # 4 x 30s of read plus 7s of backoff is roughly 127 seconds, and that
-      # figure is itself a floor rather than a ceiling -- it counts neither the
-      # connect and write phases nor TLS, and http.rb's budgets are inactivity
-      # windows (see WHAT THIS DOES NOT BOUND).
+      # transport errors, sleeping 1s, 2s, then 4s between them -- or longer on
+      # a 429 that carries Retry-After, which is honored up to
+      # RetryAfter::MAX_SECONDS and charged against this budget like any other
+      # backoff. Four bounded attempts chained together are not bounded by any
+      # one attempt's budget: 4 x 30s of read plus 7s of backoff is roughly 127
+      # seconds, and that figure is itself a floor rather than a ceiling -- it
+      # counts neither the connect and write phases nor TLS, nor a server-
+      # requested wait, and http.rb's budgets are inactivity windows (see WHAT
+      # THIS DOES NOT BOUND).
       #
       # That number only matters because of where the chain runs. RackApp
       # serializes EVERY MCP dispatch behind RackApp::DISPATCH_LOCK, and the
@@ -298,6 +301,14 @@ module Hyperon
           # (see Client#take_retry_pause): this predicts, the recheck
           # observes, and only the recheck knows what the sleep actually
           # cost.
+          #
+          # `delay` is NOT always the exponential backoff. On a 429 the client
+          # honors Retry-After, so the delay can be any number up to
+          # RetryAfter::MAX_SECONDS -- a peer-chosen value. That is precisely
+          # why the gate takes the delay as an argument rather than deriving
+          # it: a wait the server asked for is charged against the budget like
+          # any other, so a 20s Retry-After inside a 15s dispatch is refused
+          # here instead of holding the lock for 20 seconds.
           #
           # MIN_ATTEMPT_SECONDS is an admission threshold, not the attempt's
           # cost: clearing it only means the attempt will not be refused at
