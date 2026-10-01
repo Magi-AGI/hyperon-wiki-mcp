@@ -124,14 +124,27 @@ RSpec.describe Hyperon::Wiki::Mcp::RackApp, "dispatch deadline" do
   # gem's own Client/Auth/Tools are shared verbatim with the stdio entrypoints
   # and every CLI and batch caller. Nothing outside RackApp dispatch may arm
   # this, or CLI long-tail retries would start failing at 15s.
+  #
+  # Textual, and honestly so: this proves no SHIPPED file arms the budget
+  # outside RackApp, not that none ever could. It cannot see an arm reached
+  # through metaprogramming, nor one in a host application that loads this gem.
+  # bin/ is scanned alongside lib/ because the stdio entrypoints are precisely
+  # the callers that must stay unbudgeted, and a direct thread_variable_set of
+  # DispatchDeadline::VARIABLE is treated as arming too -- it would bypass #arm
+  # entirely, including the ensure that disarms it.
   it "is armed only from RackApp dispatch, so CLI and stdio callers stay unbudgeted" do
-    lib_root = File.expand_path("../../../../lib", __dir__)
-    arming_files = Dir.glob("#{lib_root}/**/*.rb").select do |path|
-      File.readlines(path).reject { |line| line.strip.start_with?("#") }
-          .any? { |line| line.match?(/DispatchDeadline\.arm\b/) }
+    gem_root = File.expand_path("../../../..", __dir__)
+    candidates = Dir.glob("#{gem_root}/lib/**/*.rb") + Dir.glob("#{gem_root}/bin/*")
+
+    arming = candidates.select { |path| File.file?(path) }.select do |path|
+      code = File.readlines(path, chomp: true).reject { |line| line.strip.start_with?("#") }
+      code.any? do |line|
+        line.match?(/DispatchDeadline\.arm\b/) ||
+          (line.include?("thread_variable_set") && line.include?("dispatch_deadline"))
+      end
     end
 
-    expect(arming_files.map { |path| path.delete_prefix("#{lib_root}/") })
-      .to contain_exactly("hyperon/wiki/mcp/rack_app.rb")
+    expect(arming.map { |path| path.delete_prefix("#{gem_root}/") })
+      .to contain_exactly("lib/hyperon/wiki/mcp/rack_app.rb")
   end
 end

@@ -42,6 +42,35 @@ RSpec.describe Hyperon::Wiki::Mcp::HttpTimeouts do
     end
   end
 
+  describe "MIN_PHASE_SECONDS" do
+    # http.rb has no sane reading of a zero or negative timeout, so an attempt
+    # admitted with a sliver of budget left still needs a positive number per
+    # phase. This floor is the ONE documented way an attempt can outlive the
+    # remaining budget, which is only tolerable because it is small and
+    # bounded: at most OUTBOUND.size * this.
+    it "is a positive, finite floor" do
+      expect(described_class::MIN_PHASE_SECONDS).to be_a(Numeric)
+      expect(described_class::MIN_PHASE_SECONDS).to be > 0
+      expect(described_class::MIN_PHASE_SECONDS).to be_finite
+    end
+
+    # If the floors could sum past the budget by much, "total" would stop
+    # meaning anything. Pinning the overshoot keeps that trade visible.
+    it "bounds the worst-case overshoot of one attempt to a few seconds" do
+      expect(described_class::MIN_PHASE_SECONDS * described_class::OUTBOUND.size).to be <= 3
+    end
+  end
+
+  describe "BudgetExhaustedError" do
+    # Every outbound path in the gem rescues HTTP::Error and maps it to its own
+    # failure (APIError, JWKSError, AuthenticationError). A refusal that did not
+    # descend from it would escape all three and crash whatever tool was
+    # running instead of failing closed.
+    it "descends from HTTP::Error so existing rescues already map it" do
+      expect(described_class::BudgetExhaustedError.ancestors).to include(HTTP::TimeoutError, HTTP::Error)
+    end
+  end
+
   describe ".client" do
     it "applies per-operation timeouts rather than a global or null budget" do
       expect(described_class.client.default_options.timeout_class).to eq(HTTP::Timeout::PerOperation)

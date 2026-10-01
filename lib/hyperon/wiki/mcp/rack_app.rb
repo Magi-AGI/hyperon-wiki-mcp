@@ -1089,8 +1089,10 @@ module Hyperon
         # caller share the same Client, Auth, and Tools, run no lock, block
         # nobody, and keep their long-tail retries untouched.
         #
-        # See DispatchDeadline for why the budget is total rather than
-        # per-attempt, and why 15s.
+        # What the budget bounds and what it does not -- a trickling peer and
+        # Tools#upload_from_url's own Net::HTTP timeouts are outside it -- is
+        # spelled out on DispatchDeadline, along with why the budget is total
+        # rather than per-attempt, and why 15s.
         def with_dispatch_deadline(&)
           Hyperon::Wiki::Mcp::DispatchDeadline.arm(&)
         end

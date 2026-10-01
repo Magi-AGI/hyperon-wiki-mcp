@@ -233,11 +233,21 @@ module Hyperon
 
         # Fetch all pages of a paginated resource
         #
+        # Under an armed DispatchDeadline (server dispatch only) the walk is
+        # bounded by the budget, not by the page count: once it is spent the
+        # shared HTTP seam refuses the next page and that refusal surfaces as
+        # APIError. Raising rather than returning early is deliberate -- a
+        # silently truncated walk looks like a complete one, and a caller that
+        # wrote back a "full" list it never finished reading would do real
+        # damage. Off the server path nothing is armed and the walk runs to
+        # the end as it always has.
+        #
         # @param path [String] the endpoint path
         # @param limit [Integer] items per page
         # @param params [Hash] additional query parameters
         # @yield [Array] each page of items
         # @return [Array] all items if no block given
+        # @raise [APIError] if an armed dispatch budget expires mid-walk
         def each_page(path, limit: 50, **params)
           return enum_for(:each_page, path, limit: limit, **params) unless block_given?
 
@@ -275,76 +285,131 @@ module Hyperon
 
         # Make HTTP request with authentication and retry logic
         def request(method, path, params: nil, json: nil, retry_count: 0)
-          url = config.url_for(path)
-          token = auth.token
+          response = dispatch(method, path, params: params, json: json)
 
-          headers = {
-            "Authorization" => "Bearer #{token}",
-            "Content-Type" => "application/json"
-          }
-
-          # Configure HTTP client with SSL settings and timeouts
-          # Timeouts prevent hanging when Decko is slow, returning errors before
-          # ChatGPT's ~15s timeout kills the connection (causing nginx 499s)
-          bounded = http_client(headers)
-
-          response = case method
-                     when :get
-                       bounded.get(url, params: params, ssl_context: ssl_context)
-                     when :post
-                       bounded.post(url, json: json, ssl_context: ssl_context)
-                     when :patch
-                       bounded.patch(url, json: json, ssl_context: ssl_context)
-                     when :put
-                       bounded.put(url, json: json, ssl_context: ssl_context)
-                     when :delete
-                       bounded.delete(url, ssl_context: ssl_context)
-                     else
-                       raise ArgumentError, "Unsupported HTTP method: #{method}"
-                     end
-
-          # Check if we should retry
-          if should_retry?(response, retry_count)
-            retry_delay = calculate_retry_delay(retry_count)
-            return retry_or_give_up(response, retry_delay) do
-              $stderr.puts "Retrying request after #{retry_delay}s (attempt #{retry_count + 1}/3)"
-              sleep(retry_delay)
-              request(method, path, params: params, json: json, retry_count: retry_count + 1)
-            end
+          if should_retry?(response, retry_count) &&
+             retry_after_backoff?(calculate_retry_delay(retry_count), retry_count, notice: "Retrying request after")
+            return request(method, path, params: params, json: json, retry_count: retry_count + 1)
           end
 
           handle_response(response)
         rescue HTTP::Error => e
-          # Retry on network errors
-          if retry_count < 3 && DispatchDeadline.room_for?(calculate_retry_delay(retry_count))
-            retry_delay = calculate_retry_delay(retry_count)
-            $stderr.puts "Network error, retrying after #{retry_delay}s (attempt #{retry_count + 1}/3)"
-            sleep(retry_delay)
+          # Retry on network errors -- but never on the seam's own refusal.
+          # BudgetExhaustedError arrives here as an HTTP::Error like any other,
+          # and retrying it would be incoherent: the budget that refused this
+          # attempt cannot have grown, so the retry would sleep the backoff and
+          # then be refused again at the same seam.
+          if retryable_transport_error?(e, retry_count) &&
+             retry_after_backoff?(calculate_retry_delay(retry_count), retry_count,
+                                  notice: "Network error, retrying after")
             return request(method, path, params: params, json: json, retry_count: retry_count + 1)
           end
 
+          report_transport_give_up(e, retry_count)
           raise APIError, "HTTP request failed: #{e.message}"
         end
 
-        # Take the retry, or stop because the dispatch budget is spent.
+        # Send one bounded attempt and hand back the raw response.
         #
-        # The budget is consulted BEFORE the backoff sleep, not after: sleeping
-        # the delay out and only then finding nothing left spends lock time to
-        # learn nothing. When no budget is armed -- every CLI, batch, and stdio
-        # caller -- room_for? is always true and this is exactly the retry that
-        # has always run.
-        #
-        # Giving up surfaces the response the server actually sent (the 503,
-        # the 429) through handle_response rather than a synthetic
-        # deadline-specific error: callers already map those, and inventing a
-        # new error class here would make every one of them wrong about a
-        # failure they already handle.
-        def retry_or_give_up(response, retry_delay)
-          return yield if DispatchDeadline.room_for?(retry_delay)
+        # Split out of #request so the retry policy there reads as policy. The
+        # client comes from #http_client, which is the only outbound builder in
+        # this class and the seam that refuses an attempt a spent server-dispatch
+        # budget cannot pay for -- so an expired dispatch stops here, before a
+        # socket is opened, rather than on the next retry decision.
+        def dispatch(method, path, params: nil, json: nil)
+          url = config.url_for(path)
+          bounded = http_client(
+            "Authorization" => "Bearer #{auth.token}",
+            "Content-Type" => "application/json"
+          )
 
+          case method
+          when :get then bounded.get(url, params: params, ssl_context: ssl_context)
+          when :post then bounded.post(url, json: json, ssl_context: ssl_context)
+          when :patch then bounded.patch(url, json: json, ssl_context: ssl_context)
+          when :put then bounded.put(url, json: json, ssl_context: ssl_context)
+          when :delete then bounded.delete(url, ssl_context: ssl_context)
+          else raise ArgumentError, "Unsupported HTTP method: #{method}"
+          end
+        end
+
+        # Whether a transport failure is worth another attempt.
+        #
+        # The seam's own refusal never is: the budget that refused this attempt
+        # cannot have grown by the time a backoff ends, so retrying it would
+        # sleep and then be refused again at the same place.
+        def retryable_transport_error?(error, retry_count)
+          return false if error.is_a?(HttpTimeouts::BudgetExhaustedError)
+
+          retry_count < 3
+        end
+
+        # Sleep the backoff if the dispatch budget can pay for the retry, and
+        # answer whether the next attempt may be made. Sleeps as a side effect
+        # -- the question and the waiting are one decision, since the budget
+        # that authorizes the wait is the same one the wait spends.
+        #
+        # Checked TWICE, which is the point. Before the sleep, because sleeping
+        # the delay out and only then finding nothing left spends lock time to
+        # learn nothing; and the check is #room_for_retry?, which charges the
+        # backoff AND an attempt's worth of budget, because authorizing a sleep
+        # for an attempt that cannot run is the same waste one step later.
+        # After the sleep, because the pre-check is a prediction -- a real
+        # sleep(1) can take rather longer than a second under load, and only
+        # the clock afterwards knows what it actually cost.
+        #
+        # When no budget is armed -- every CLI, batch, and stdio caller -- both
+        # checks are unconditionally true and this is exactly the retry that
+        # has always run, same message, same delay.
+        #
+        # @return [Boolean] true when the caller should make the next attempt
+        def retry_after_backoff?(retry_delay, retry_count, notice:)
+          unless DispatchDeadline.room_for_retry?(retry_delay)
+            report_refused_retry("before backoff")
+            return false
+          end
+
+          $stderr.puts "#{notice} #{retry_delay}s (attempt #{retry_count + 1}/3)"
+          sleep(retry_delay)
+
+          return true unless DispatchDeadline.expired?
+
+          report_refused_retry("after #{retry_delay}s backoff")
+          false
+        end
+
+        # Say why the chain stopped retrying.
+        #
+        # Audible rather than silent: from the outside a bounded refusal and a
+        # genuinely failing Decko look identical, and the operator question --
+        # "did the request fail, or did we decline to make it?" -- is only
+        # answerable from here. The remaining budget is included because its
+        # sign distinguishes "ran out mid-chain" from "arrived with nothing".
+        def report_refused_retry(stage)
           left = format("%.1f", DispatchDeadline.remaining.to_f)
-          $stderr.puts "Dispatch budget exhausted; not retrying (#{left}s left)"
-          handle_response(response)
+          $stderr.puts "Dispatch budget exhausted #{stage}; not retrying (#{left}s left)"
+        end
+
+        # Say why a transport failure is being surfaced instead of retried.
+        #
+        # The response path logs when it gives up; this path raised APIError in
+        # silence, so an exhausted retry chain, a refused dispatch, and a
+        # single unretryable failure were indistinguishable in the logs. The
+        # budget state is named explicitly because HttpTimeouts' refusal
+        # arrives here as an HTTP::Error like any other and would otherwise
+        # read as a network fault.
+        def report_transport_give_up(error, retry_count)
+          reason = if error.is_a?(HttpTimeouts::BudgetExhaustedError)
+                     "dispatch budget exhausted"
+                   elsif retry_count >= 3
+                     "retries exhausted"
+                   elsif DispatchDeadline.armed?
+                     format("dispatch budget too small to retry (%.1fs left)", DispatchDeadline.remaining.to_f)
+                   else
+                     "not retryable"
+                   end
+
+          $stderr.puts "Giving up after #{retry_count + 1} attempt(s) (#{reason}): #{error.class}: #{error.message}"
         end
 
         # Handle HTTP response and errors

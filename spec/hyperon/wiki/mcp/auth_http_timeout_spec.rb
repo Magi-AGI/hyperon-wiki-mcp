@@ -5,6 +5,7 @@ require "webmock/rspec"
 require "hyperon/wiki/mcp/config"
 require "hyperon/wiki/mcp/auth"
 require "hyperon/wiki/mcp/client"
+require "hyperon/wiki/mcp/dispatch_deadline"
 require "hyperon/wiki/mcp/http_timeouts"
 
 # Auth's outbound calls -- the JWKS fetch and the token fetch -- must carry
@@ -176,6 +177,92 @@ RSpec.describe Hyperon::Wiki::Mcp::Auth do
       unbounded = source.scan(/HTTP\.(?:get|post|put|patch|delete|head)\b/)
 
       expect(unbounded).to be_empty
+    end
+  end
+
+  # Auth under an armed server-dispatch deadline.
+  #
+  # Worth its own section because Auth is on the critical path of every other
+  # bounded call: Client#request calls auth.token BEFORE it builds a request,
+  # and the verification path calls #fetch_jwks. If the deadline did not reach
+  # these, an expired dispatch could still spend a fresh token fetch (connect +
+  # write + read) before the request it was fetched for was refused -- so the
+  # budget would bound the request and not the dispatch.
+  #
+  # Both paths reach the budget through HttpTimeouts.client, the same seam
+  # Client uses, and both already rescue HTTP::Error -- which is why
+  # BudgetExhaustedError is an HTTP::TimeoutError and not a new class.
+  describe "under an armed dispatch deadline" do
+    let(:clock) { { now: 1000.0 } }
+
+    before { allow(Hyperon::Wiki::Mcp::DispatchDeadline).to receive(:now) { clock[:now] } }
+
+    it "splits the remaining budget across the token fetch's phases" do
+      stub_request(:post, auth_url).to_return(
+        status: 200,
+        body: { "token" => "test-token", "role" => "user", "expires_in" => 3600 }.to_json
+      )
+
+      Hyperon::Wiki::Mcp::DispatchDeadline.arm(9) do
+        expect(auth.send(:http_client).default_options.timeout_options).to eq(
+          connect_timeout: 5, write_timeout: 3, read_timeout: 1
+        )
+        expect(auth.token).to eq("test-token")
+      end
+    end
+
+    it "refuses a token fetch once the budget is spent, as AuthenticationError" do
+      stub_request(:post, auth_url).to_return(
+        status: 200,
+        body: { "token" => "test-token", "role" => "user", "expires_in" => 3600 }.to_json
+      )
+
+      Hyperon::Wiki::Mcp::DispatchDeadline.arm(15) do
+        clock[:now] += 20
+
+        expect { auth.token }.to raise_error(
+          Hyperon::Wiki::Mcp::Auth::AuthenticationError, /Token fetch failed/
+        )
+      end
+
+      expect(WebMock).not_to have_requested(:post, auth_url)
+    end
+
+    it "refuses a JWKS fetch once the budget is spent, as JWKSError" do
+      stub_request(:get, jwks_url).to_return(status: 200, body: { "keys" => [] }.to_json)
+
+      Hyperon::Wiki::Mcp::DispatchDeadline.arm(15) do
+        clock[:now] += 20
+
+        expect { auth.fetch_jwks }.to raise_error(
+          Hyperon::Wiki::Mcp::Auth::JWKSError, /JWKS fetch failed/
+        )
+      end
+
+      expect(WebMock).not_to have_requested(:get, jwks_url)
+    end
+
+    # Fail-closed, same as a timeout: a refused fetch must leave no credential
+    # and no cached keys behind for a later call to trust.
+    it "publishes no credential and caches no keys when refused" do
+      Hyperon::Wiki::Mcp::DispatchDeadline.arm(15) do
+        clock[:now] += 20
+
+        expect { auth.token }.to raise_error(Hyperon::Wiki::Mcp::Auth::AuthenticationError)
+        expect { auth.fetch_jwks }.to raise_error(Hyperon::Wiki::Mcp::Auth::JWKSError)
+      end
+
+      expect(auth.instance_variable_get(:@token)).to be_nil
+      expect(auth.token_valid?).to be(false)
+      expect(auth.instance_variable_get(:@jwks_cache)).to be_nil
+    end
+
+    # The CLI/stdio half of the contract at Auth's seam: unarmed, a long auth
+    # round trip is fine and must not be refused or narrowed.
+    it "leaves unarmed callers on the full shared budget" do
+      expect(auth.send(:http_client).default_options.timeout_options).to eq(
+        connect_timeout: 5, write_timeout: 5, read_timeout: 30
+      )
     end
   end
 end

@@ -12,7 +12,10 @@ module Hyperon
       # 30s). Client#request then retries up to three times on 429/5xx and on
       # transport errors, sleeping 1s, 2s, then 4s between them. Four bounded
       # attempts chained together are not bounded by any one attempt's budget:
-      # worst case is 4 x 30s of read plus 7s of backoff, roughly 127 seconds.
+      # 4 x 30s of read plus 7s of backoff is roughly 127 seconds, and that
+      # figure is itself a floor rather than a ceiling -- it counts neither the
+      # connect and write phases nor TLS, and http.rb's budgets are inactivity
+      # windows (see WHAT THIS DOES NOT BOUND).
       #
       # That number only matters because of where the chain runs. RackApp
       # serializes EVERY MCP dispatch behind RackApp::DISPATCH_LOCK, and the
@@ -23,6 +26,44 @@ module Hyperon
       # start failing slow-but-working deployments, which is a policy change
       # rather than a fix. Capping the TOTAL is the only bound that holds
       # regardless of how the attempts are arranged.
+      #
+      # WHAT THE BOUND ACTUALLY IS
+      #
+      # Stated precisely, because an advertised bound that does not hold is
+      # worse than none -- it stops people looking:
+      #
+      #   * No outbound attempt STARTS once the budget is spent. HttpTimeouts
+      #     refuses at the shared seam (BudgetExhaustedError), so an expired
+      #     dispatch stops making requests instead of starting one more with a
+      #     floor budget. That is what bounds a paginated walk, where the cost
+      #     is the NUMBER of requests rather than any one request's timeout.
+      #   * No retry is authorized unless the backoff AND the attempt it
+      #     authorizes both fit (see #room_for_retry?), and the budget is
+      #     re-checked after the backoff sleep actually happens.
+      #   * One attempt's socket budgets sum to at most what the deadline has
+      #     left, except for the MIN_ATTEMPT_SECONDS floor: an attempt that
+      #     starts with a sliver of budget left still gets a positive,
+      #     finite timeout per phase, so a single attempt can overshoot by at
+      #     most OUTBOUND.size * MIN_ATTEMPT_SECONDS (3s today).
+      #
+      # So one armed dispatch spends at most its budget plus ~3s of socket
+      # time, versus the ~127s+ it could spend before.
+      #
+      # WHAT THIS DOES NOT BOUND
+      #
+      #   * A trickling peer. http.rb's read and write budgets are INACTIVITY
+      #     timeouts, re-armed on every wait_readable / wait_writable
+      #     (http-5.3.1 lib/http/timeout/per_operation.rb). A server that
+      #     emits one byte inside each window outlives any total this module
+      #     can express. Bounding that needs an absolute deadline inside the
+      #     socket loop -- a custom HTTP::Timeout class -- which is a
+      #     follow-up, not this seam.
+      #   * Outbound calls that do not go through HttpTimeouts. Tools
+      #     #upload_from_url downloads an arbitrary third-party URL with its
+      #     own Net::HTTP open/read timeouts; it never touches Decko, and it
+      #     is unaffected by this budget.
+      #   * Work that is not outbound HTTP at all: local computation inside a
+      #     tool is not measured or interrupted here.
       #
       # WHY SERVER DISPATCH ONLY
       #
@@ -69,10 +110,14 @@ module Hyperon
         # leaves the lock free for the sessions queued behind it.
         SERVER_DISPATCH_BUDGET_SECONDS = 15
 
-        # The floor for any single clamped attempt. A deadline that has
-        # already expired must still hand the attempt a positive, finite
-        # budget: zero or a negative timeout is not "fail fast" to http.rb,
-        # it is an argument it has no sane reading of.
+        # The smallest attempt worth authorizing a backoff sleep for.
+        #
+        # #room_for_retry? charges a retry for the backoff AND for the attempt
+        # the backoff exists to make: sleeping 1s to start an attempt that the
+        # seam will refuse the instant it begins spends lock time to learn
+        # nothing. This is deliberately NOT a floor handed to a socket --
+        # HttpTimeouts::MIN_PHASE_SECONDS is that, and only for an attempt
+        # that still has budget left when it starts.
         MIN_ATTEMPT_SECONDS = 1
 
         # Where the armed deadline lives on the current thread. Namespaced so
@@ -120,37 +165,49 @@ module Hyperon
             at && (at - now)
           end
 
-          # Narrow a per-operation budget so it cannot outlive the deadline.
+          # Whether an armed budget has been spent.
           #
-          # Without this the total would be advisory: one attempt is allowed a
-          # 30s read, so a chain armed at 15s could still park the lock for
-          # 30s before anyone checked the clock. Clamping makes the attempt
-          # itself expire at the deadline.
+          # The gate HttpTimeouts applies before it will build a client at
+          # all. Distinct from `remaining <= 0` at the call site because an
+          # UNARMED deadline must not read as expired: off the server path
+          # there is no budget to spend, and work there must never be refused.
           #
-          # @param seconds [Numeric] the unclamped per-operation budget
-          # @return [Numeric] seconds, or what is left of the budget
-          def clamp(seconds)
+          # @return [Boolean] true only when a budget is armed and gone
+          def expired?
             left = remaining
-            return seconds if left.nil?
-
-            # Floored with a beginless range rather than clamp(MIN, left): an
-            # expired deadline makes `left` smaller than the floor, and a
-            # two-argument clamp raises when its min exceeds its max.
-            [seconds, left].min.clamp(MIN_ATTEMPT_SECONDS..)
+            !left.nil? && left <= 0
           end
 
-          # Whether another attempt costing at least `seconds` still fits.
+          # Whether a cost of `seconds` still fits in the armed budget.
           #
-          # Asked BEFORE a retry sleeps, not after: sleeping out the backoff
-          # and then discovering the budget is gone spends lock time to learn
-          # nothing. With no budget armed this is always true, which is what
-          # keeps CLI and batch retries exactly as they were.
+          # With no budget armed this is always true, which is what keeps CLI
+          # and batch callers exactly as they were.
           #
           # @param seconds [Numeric] the cost about to be incurred
           # @return [Boolean]
           def room_for?(seconds)
             left = remaining
             left.nil? || left > seconds
+          end
+
+          # Whether a retry -- the backoff sleep AND the attempt it exists to
+          # make -- still fits.
+          #
+          # Charging the backoff alone was the bug this replaces: with 1.1s
+          # left and a 1s delay the chain slept, woke with 0.1s, and started
+          # an attempt that could not accomplish anything. A retry is only
+          # worth authorizing if there is still an attempt's worth of budget
+          # on the far side of the sleep.
+          #
+          # Asked BEFORE the sleep, and the budget is checked AGAIN after it
+          # (see Client#take_retry_pause): this predicts, the recheck
+          # observes, and only the recheck knows what the sleep actually
+          # cost.
+          #
+          # @param delay [Numeric] the backoff about to be slept
+          # @return [Boolean]
+          def room_for_retry?(delay)
+            room_for?(delay + MIN_ATTEMPT_SECONDS)
           end
 
           private
