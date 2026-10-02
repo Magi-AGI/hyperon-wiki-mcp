@@ -76,8 +76,41 @@ These touch **shared auth infra** — review deliberately before wiring:
    (`atomspace_query_atoms`, `atomspace_get_card_atom`, …) that POST to the deck endpoints
    `/api/mcp/atomspace_mirror/*` and return parsed JSON.
 
+   **LANDED** before this branch, in `64208ce` ("Lane C / L9: AtomSpace mirror agent tools (gem)"),
+   as `tools.rb:63-105`. All eight exist and each `.compact`s its nil params away before the call.
+   One correction to the wording above, which described an intent the code did not keep: they are
+   `client.get` calls with query params, **not** POSTs. This step was stale, not open.
+
 5. **Base rescue taxonomy** — extend `Atomspace::Base::TRANSPORT_ERRORS` with the gem's real
    `Client` transport error classes; keep it NARROW (no `rescue StandardError`).
+
+   **LANDED.** The list this step asked to extend was not merely incomplete, it was **unreachable**:
+   it named `Errno::ECONNREFUSED, Net::OpenTimeout, Net::ReadTimeout, SocketError`, while `Client`
+   is built on the `http` gem and both `Client#request` (`client.rb:296`) and `#get_raw`
+   (`client.rb:209`) `rescue HTTP::Error => e` and re-raise `APIError, "HTTP request failed: …"`.
+   No listed class could reach `rescue *TRANSPORT_ERRORS`; a dead mirror arrived at
+   `rescue Client::APIError` with a **nil** `error_code`, missed `KNOWN_READ_ERRORS`, and was
+   re-raised out of the tool. `HttpTimeouts::BudgetExhaustedError` (an `HTTP::TimeoutError`
+   subclass, so wrapped identically) took the same path, which made the dispatch deadline's
+   deliberate local refusal surface as an unhandled error.
+
+   The taxonomy is now stated against what the client actually raises — `HTTP::ConnectionError`
+   and `HTTP::TimeoutError`, which cover the socket and timeout subclasses plus
+   `BudgetExhaustedError` by inheritance — and the `APIError` branch additionally matches on
+   `Exception#cause` (`transport_wrapped?`), because the wrapper carries no status and no error
+   code of its own. Matching the cause rather than the `"HTTP request failed"` string is
+   deliberate: rewording that message must not silently un-handle every transport fault.
+
+   **Still narrow, and the width is the whole point.** `HTTP::Error` itself is NOT rescued —
+   `HTTP::RequestError` (unsupported scheme/method) and `HTTP::ResponseError` (state errors,
+   redirect loops) are bugs in our own code, and widening to the parent would dress each one as
+   "retry shortly". A JSON-parse-wrapped `APIError`, an unexpected-status `APIError`, and a 5xx
+   without a Lane C code all still re-raise. `rescue StandardError` is still absent.
+
+   **One message for two causes, on purpose.** A failing mirror and a spent dispatch budget are
+   different events, but the agent's move is identical (retry; the next dispatch arrives with a
+   fresh budget), so both answer `AtomSpace mirror service unavailable; retry shortly.` — worded
+   as unavailability rather than remote fault, since a budget refusal never touches the network.
 
 6. **Mounting the dedicated entrypoint (OPEN — blocked on product decisions, not on code)** —
    `AtomspaceEntrypoint.handle` answers one parsed request object and is reached by no HTTP path or
