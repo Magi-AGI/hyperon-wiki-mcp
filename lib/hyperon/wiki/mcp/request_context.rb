@@ -74,6 +74,42 @@ module Hyperon
         end
         # rubocop:enable Metrics/ParameterLists
 
+        # Whether THIS request's own grant read authorizes one scope.
+        #
+        # The authorization question belongs here rather than at each caller
+        # because membership in grant_scopes is not an authorization decision.
+        # GrantReadResult#authorization_valid_now? owns the fail-closed rule --
+        # verified, carrying a trustworthy deadline, read strictly before that
+        # deadline, AND granted the scope -- so a caller that reached past this
+        # into grant_scopes would keep the scope half and drop the freshness
+        # half, authorizing an expired grant whose scope list still names the
+        # scope.
+        #
+        # False, never an error, on every shape it cannot affirm:
+        #
+        #   * A grant result that cannot answer. A supplied result that was not
+        #     immutable all the way down is snapshotted into GrantSnapshot,
+        #     which carries the captured fields and no decision method, so
+        #     there is no rule left to apply -- and the scope list it does
+        #     carry must not stand in for one.
+        #   * A required scope that names nothing a granted list could
+        #     legitimately contain. Scopes arrive from a verified claim
+        #     unvalidated (Auth#scopes passes nil elements through), so a nil
+        #     or non-String requirement must never be matchable by a nil or
+        #     non-String grant. Same definition of unresolvable the AtomSpace
+        #     registry already uses: what a membership check can act on, not
+        #     nil alone.
+        #
+        # Says nothing about WHICH principals are granted a scope -- that is
+        # the deck's policy (McpApi::AtomspaceGrants) -- only what this
+        # request's captured grant read already said.
+        def authorizes_scope?(required_scope, now: Time.now)
+          return false unless required_scope.is_a?(String) && !required_scope.empty?
+          return false unless grant_read_result.respond_to?(:authorization_valid_now?)
+
+          grant_read_result.authorization_valid_now?(required_scope, now: now)
+        end
+
         private
 
         # The context holds a snapshot, not a live reference: a caller that

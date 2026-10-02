@@ -55,6 +55,46 @@ module Hyperon
                 raise Client::AuthorizationError, "#{required} scope required"
               end
 
+              # The same two entry points, asking a RequestContext instead of a bare granted-scope
+              # array.
+              #
+              # A bare array leaves every caller to decide for itself whether that array may be
+              # trusted, and the array cannot say: a verified grant's scope list keeps naming its
+              # scopes after the grant's authorization deadline has passed. Asking the context
+              # routes the question through RequestContext#authorizes_scope? -> GrantReadResult
+              # #authorization_valid_now?, so the freshness half of the fail-closed rule cannot be
+              # dropped by a caller that happens to hold a scope list.
+              #
+              # Each keeps its array-taking twin's direction, and for the same reason: gate guards
+              # one invocation so it denies that invocation; visible builds the list handed to
+              # every caller so it drops the one entry.
+              #
+              # A nil context -- what rack_app's #build_request_context returns when no grant backs
+              # the request -- is denial, not an exception to handle: absence of a context means
+              # nothing was authorized. Anything that cannot answer an authorization question at
+              # all is treated identically, rather than inspected for a scope list to fall back on.
+              def visible_for_context(context, now: Time.now)
+                TOOLS.select do |tool|
+                  required = resolve_required_scope(tool)
+                  required && context_authorizes?(context, required, now)
+                end
+              end
+
+              def gate_for_context!(tool, context, now: Time.now)
+                required = resolve_required_scope(tool)
+                unless required
+                  raise Client::AuthorizationError,
+                        "unresolved required scope for #{tool.inspect}; refusing invocation"
+                end
+                unless authorizing_context?(context)
+                  raise Client::AuthorizationError,
+                        "no request context can authorize #{required}; refusing invocation"
+                end
+                return if context.authorizes_scope?(required, now: now)
+
+                raise Client::AuthorizationError, "#{required} scope required"
+              end
+
               # The scope a tool actually names, or nil when it names none the granted-scope list
               # could legitimately contain. Unresolvable is defined by what a membership check
               # can act on rather than by nil alone: a missing method, nil, a non-String, and an
@@ -68,6 +108,19 @@ module Hyperon
                 return nil unless required.is_a?(String) && !required.empty?
 
                 required
+              end
+
+              # A context that can answer an authorization question at all. The capability check
+              # is deliberately the whole test: RequestContext#authorizes_scope? already applies
+              # the fail-closed rule, so anything answering it is trusted to answer, and anything
+              # not answering it authorizes nothing. No duck-typed scope list is read as a
+              # substitute -- that is exactly the shortcut these entry points exist to close.
+              def authorizing_context?(context)
+                !context.nil? && context.respond_to?(:authorizes_scope?)
+              end
+
+              def context_authorizes?(context, required, now)
+                authorizing_context?(context) && context.authorizes_scope?(required, now: now)
               end
             end
           end
