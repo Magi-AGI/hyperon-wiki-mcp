@@ -28,8 +28,30 @@ These touch **shared auth infra** — review deliberately before wiring:
    *dedicated* list — the "hide" half of the hide + invoke-gate predicate. Step 3 is the other half
    and is not optional.
 
+   **LANDED** as `Server::AtomspaceEntrypoint` (`server/atomspace_entrypoint.rb`): a dedicated
+   JSON-RPC `tools/list` + `tools/call` path whose whole tool table is `Registry::TOOLS`, so a
+   public Deck tool is not reachable through it at all. It prefers the **context-taking** seams
+   (`visible_for_context` / `gate_for_context!`) over the array-taking pair named above, because a
+   bare scope list cannot say whether the grant behind it is still fresh. Not yet mounted on an
+   HTTP path or stdio transport — see step 6.
+
 3. **Invocation enforcement (dispatch)** — call `Registry.gate!(tool, token_scopes)` before
    `tool.call(...)`. Visibility filtering alone is not enforcement.
+
+   **LANDED** in the same entrypoint via `gate_for_context!`, which resolves the requirement from
+   the **registered tool object** rather than the request's tool name, and runs before the deck is
+   touched — so a denied call performs no read.
+
+   **Denial surface (local contract).** An authenticated caller whose grant does not authorize the
+   scope gets a JSON-RPC error, **not** HTTP 401: the transport exchange succeeded and the
+   credential is valid, so "authenticate and retry" would be a lie and would loop the client over a
+   decision that will not change. rack_app keeps 401 for the genuinely unauthenticated case.
+   `AtomspaceEntrypoint::AUTHORIZATION_DENIED = -32002` is a local application code in the
+   JSON-RPC implementation-defined server-error range (-32000..-32099), chosen rather than reused
+   because rack_app already spends `-32001` on "Authentication required" / "Session not found".
+   `tools/list` filters to an **empty list** instead of erroring (it is built for every caller);
+   `tools/call` **denies**. Unknown-tool and method-not-found keep the gem's own codes, because
+   those are routing facts and not authorization facts.
 
 4. **MagiTools (`Hyperon::Wiki::Mcp::Tools`)** — add 8 thin HTTP wrappers
    (`atomspace_query_atoms`, `atomspace_get_card_atom`, …) that POST to the deck endpoints
@@ -37,6 +59,13 @@ These touch **shared auth infra** — review deliberately before wiring:
 
 5. **Base rescue taxonomy** — extend `Atomspace::Base::TRANSPORT_ERRORS` with the gem's real
    `Client` transport error classes; keep it NARROW (no `rescue StandardError`).
+
+6. **Mounting the dedicated entrypoint (OPEN)** — `AtomspaceEntrypoint.handle` answers one parsed
+   request object and is reached by no HTTP path or stdio transport yet. Mounting owns the concerns
+   it deliberately does not: which host/path the dedicated toolset is served on, batched requests,
+   notification suppression for an id-less request, session handling, and HTTP status mapping (the
+   authorization denial is a 200-with-JSON-RPC-error, not a 403). Public Deck tools stay
+   **scope-free** — none declares a `required_scope`, and nothing here invents one for them.
 
 Deck side (hyperon-wiki, separate branch): `Api::Mcp::AtomspaceMirrorController` + routes
 `namespace :atomspace_mirror`, `Atomspace::ReadConsistencyPort` (L7 injection),
