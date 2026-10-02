@@ -175,8 +175,14 @@ These touch **shared auth infra** — review deliberately before wiring:
    file; the mount reads its answer.
 
    **Still deck-side, still not implemented here:** which principals hold `mcp:atomspace:read`
-   (`McpApi::AtomspaceGrants`, POLICY REV4). Until that grant is real, every authenticated call
-   on this path is denied `-32002` by design, which is why (d) holds.
+   (`McpApi::AtomspaceGrants`, POLICY REV4). That half now **exists** in the deck repo at `cba3024`
+   on `phase5/atomspace-go-live-hardening` — admin / `Raw Data Analyst` / `ATOMSPACE_READ_GRANTS`
+   principals, API keys allowlist-only, `mcp:admin` never implied — and the Deck→gem claim contract
+   (space-delimited `scope` string, header `kid` matching the JWKS, `iss`, and an admin/RDA
+   principal reaching `authorization_valid_now?`) has been verified end to end against both repos'
+   real code. It is **not merged and not deployed**, so (d) still holds: advertising follows the
+   grant being real in the target environment, not the grant existing on a branch. Until then every
+   authenticated call on this path is denied `-32002` by design.
 
 
 Deck side (hyperon-wiki, separate branch): `Api::Mcp::AtomspaceMirrorController` + routes
