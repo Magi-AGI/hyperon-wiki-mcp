@@ -949,11 +949,26 @@ module Hyperon
           password = client_data[:password]
           role = client_data[:role]
 
+          # ONE source for the scope, computed before the token is signed.
+          #
+          # This used to be derived AFTER issuing, and only for the response body:
+          # the signed token said nothing about scope at all, so the body and the
+          # credential described different grants and only the unverifiable half
+          # carried the scope. Computing it once and signing it (INTEGRATION.md
+          # step 1) means a resource server reads the same answer the client was
+          # told, from material the signature covers.
+          #
+          # Role-derived, and the client's REQUESTED scope is deliberately not
+          # consulted: honouring it would let a caller assert its own grant, which
+          # is exactly what Auth#scopes refuses to read from an untrusted source.
+          scope = scope_for_role(role)
+
           # Issue access token
           access_token = self.class.token_issuer.issue(
             sub: username,
             role: role,
-            session_id: new_session_id
+            session_id: new_session_id,
+            scope: scope
           )
 
           # Issue refresh token
@@ -975,13 +990,6 @@ module Hyperon
             tools: tools
           )
 
-          # Map role to scope
-          scope = case role
-                  when "admin" then "mcp:admin"
-                  when "gm" then "mcp:write"
-                  else "mcp:read"
-                  end
-
           [200, headers, [JSON.generate({
                                           access_token: access_token,
                                           token_type: "Bearer",
@@ -991,6 +999,22 @@ module Hyperon
                                         })]]
         end
         # rubocop:enable Metrics/MethodLength, Metrics/AbcSize
+
+        # The scope a role is issued, as this server has always mapped it.
+        #
+        # Unchanged policy, moved to one place so the signed claim and the response
+        # body cannot drift apart. It says nothing about mcp:atomspace:read: that
+        # scope is granted by McpApi::AtomspaceGrants (deck repo, POLICY REV4) and
+        # signed into the DECK's token that Auth#read_grant reads, not into the
+        # gem's own inbound credential. mcp:admin is likewise a separate scope and
+        # is never implied by a read scope.
+        def scope_for_role(role)
+          case role
+          when "admin" then "mcp:admin"
+          when "gm" then "mcp:write"
+          else "mcp:read"
+          end
+        end
 
         # Create a Tools instance for a specific user
         def create_user_tools(username, password, role)

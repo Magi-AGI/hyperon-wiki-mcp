@@ -19,6 +19,25 @@ These touch **shared auth infra** — review deliberately before wiring:
    admin / `Raw Data Analyst` principal. API-key principals are auto-granted nothing (allowlist
    only). `mcp:admin` is a **separate** scope, never implied by read scope.
 
+   **LANDED (issuance half).** `TokenIssuer#issue` now takes `scope:` and signs an explicit
+   space-delimited `scope` claim; `issue_token_response` computes the role-derived scope **once**,
+   via `RackApp#scope_for_role`, and passes the same string to both the signature and the response
+   body, so the two can no longer disagree. The claim is **taken, not derived** inside the issuer:
+   mapping role→scope behind a signing key would hide an authorization decision from both the deck
+   and a reader of rack_app. Nothing usable supplied ⇒ the claim is **omitted** rather than signed
+   empty — an empty claim asserts "granted nothing", absence states "nothing was decided", and both
+   fail closed for a reader (`Auth#scopes` answers `[]` either way). A client's *requested* scope is
+   still ignored; the server's role-derived answer wins. The role→scope mapping itself is unchanged.
+
+   **WHICH TOKEN FAMILY THIS IS, because the gem has two.** `OAuth::TokenIssuer` signs the gem's own
+   **inbound** access tokens (the Bearer credential an MCP client presents; verified by rack_app's
+   `verify_access_token`). `Auth#token` is a **different** credential fetched from the deck's `/auth`
+   endpoint and verified against the deck's JWKS — and `Auth#scopes` / `Auth#read_grant` read *that*
+   token's `scope` claim. So this change does **not** make `mcp:atomspace:read` reachable: that scope
+   is signed deck-side under POLICY REV4, and neither the issuer nor `scope_for_role` may mint it
+   (asserted in both new specs). `rack_app`'s `read_grant(required_scope: nil)` is unchanged.
+
+
 2. **Tool-list visibility (rack_app `create_user_tools` / tools-list path)** — the eight tools form
    a **dedicated** toolset: registered **only** in the dedicated AtomSpace MCP toolset and **never**
    in the public Hyperon Wiki MCP tool list (Card 17184, decision 2026-06-08 — an acceptance
@@ -60,12 +79,52 @@ These touch **shared auth infra** — review deliberately before wiring:
 5. **Base rescue taxonomy** — extend `Atomspace::Base::TRANSPORT_ERRORS` with the gem's real
    `Client` transport error classes; keep it NARROW (no `rescue StandardError`).
 
-6. **Mounting the dedicated entrypoint (OPEN)** — `AtomspaceEntrypoint.handle` answers one parsed
-   request object and is reached by no HTTP path or stdio transport yet. Mounting owns the concerns
-   it deliberately does not: which host/path the dedicated toolset is served on, batched requests,
-   notification suppression for an id-less request, session handling, and HTTP status mapping (the
-   authorization denial is a 200-with-JSON-RPC-error, not a 403). Public Deck tools stay
-   **scope-free** — none declares a `required_scope`, and nothing here invents one for them.
+6. **Mounting the dedicated entrypoint (OPEN — blocked on product decisions, not on code)** —
+   `AtomspaceEntrypoint.handle` answers one parsed request object and is reached by no HTTP path or
+   stdio transport yet. Mounting owns the concerns it deliberately does not: which host/path the
+   dedicated toolset is served on, batched requests, notification suppression for an id-less request,
+   session handling, and HTTP status mapping (the authorization denial is a
+   200-with-JSON-RPC-error, not a 403). Public Deck tools stay **scope-free** — none declares a
+   `required_scope`, and nothing here invents one for them.
+
+   **WHY THIS IS NOT YET IMPLEMENTABLE WITHOUT GUESSING.** Every existing transport pattern in this
+   repo answers "serve the ONE public tool table", and none of them generalizes to a second,
+   separately-authorized table:
+
+   - **No host/path is specified anywhere.** `RackApp#call` dispatches on an exhaustive
+     `[method, path]` `case`, and `HostAuthorization::ALLOWED_HOSTS` is a fixed six-entry allowlist
+     (`127.0.0.1[:3002]`, `localhost[:3002]`, `mcp.hyperon.dev`, `dev-mcp.hyperon.dev`). The
+     dedicated toolset needs either a new path on the existing host or a new host, and the choice is
+     externally visible: `README-OPS.md` documents nginx proxying `mcp.hyperon.dev` → `127.0.0.1:3002`
+     with the Host header rewritten, and `handle_root`'s advertised `endpoints` map plus
+     `/.well-known/*` `scopes_supported` would both have to change. No ENV var, service file, nginx
+     config, or doc in this repo names a second port, host, or path for AtomSpace.
+   - **A path-mount would put a registry seam reference in `rack_app.rb`,** which is exactly the
+     review trigger `spec/server/tools/atomspace/wiring_spec.rb` records ("a seam reference appearing
+     in a THIRD file … most importantly in a public dispatch path, which is how the dedicated toolset
+     would quietly become a filter on the public one"). That is a deliberate stop, not an obstacle to
+     route around.
+   - **Session, batch, and notification semantics cannot be inherited mechanically.** `RackApp`
+     delegates all three to `MCP::Server#handle` → `JsonRpcHandler.handle`, which owns array/batch
+     handling, hoists a single-element batch out of its array, drops id-less notifications by
+     returning `nil`, and validates ids against `DEFAULT_ALLOWED_ID_CHARACTERS`.
+     `AtomspaceEntrypoint.handle` answers one Hash and implements none of it. Reusing
+     `JsonRpcHandler` directly, building a second `MCP::Server` whose tool table is `Registry::TOOLS`,
+     or hand-rolling the batch/notification rules are three different designs with different
+     blast radii — and a second `MCP::Server` reintroduces the shared-mutable-`server_context`
+     problem `DISPATCH_LOCK` exists to solve, for a second server with its own lock.
+   - **stdio has no authenticated principal at all.** `bin/mcp-server` builds one
+     `StdioTransport` over the default identity with no Bearer token, no session, and no
+     `read_grant`; a stdio AtomSpace entrypoint would have no `RequestContext` to pass and would
+     either deny everything or need a new local-trust story.
+
+   **DECISION NEEDED before this can land:** (a) host and path (new path on `mcp.hyperon.dev`, or a
+   separate host/port that `ALLOWED_HOSTS` and nginx must learn); (b) whether the dedicated path is
+   served by a second `MCP::Server` instance, by `JsonRpcHandler` over `AtomspaceEntrypoint`, or by
+   the entrypoint growing its own batch/notification handling; (c) whether stdio is in scope at all,
+   and if so what principal it runs as; (d) whether `/.well-known` discovery and `handle_root`
+   advertise the dedicated endpoint publicly.
+
 
 Deck side (hyperon-wiki, separate branch): `Api::Mcp::AtomspaceMirrorController` + routes
 `namespace :atomspace_mirror`, `Atomspace::ReadConsistencyPort` (L7 injection),
