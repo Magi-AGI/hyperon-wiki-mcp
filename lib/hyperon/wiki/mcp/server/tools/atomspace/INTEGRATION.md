@@ -51,8 +51,8 @@ These touch **shared auth infra** — review deliberately before wiring:
    JSON-RPC `tools/list` + `tools/call` path whose whole tool table is `Registry::TOOLS`, so a
    public Deck tool is not reachable through it at all. It prefers the **context-taking** seams
    (`visible_for_context` / `gate_for_context!`) over the array-taking pair named above, because a
-   bare scope list cannot say whether the grant behind it is still fresh. Not yet mounted on an
-   HTTP path or stdio transport — see step 6.
+   bare scope list cannot say whether the grant behind it is still fresh. Now mounted at
+   `RackApp::ATOMSPACE_PATH` (`POST /mcp/atomspace`) — see step 6. stdio remains out of scope.
 
 3. **Invocation enforcement (dispatch)** — call `Registry.gate!(tool, token_scopes)` before
    `tool.call(...)`. Visibility filtering alone is not enforcement.
@@ -112,51 +112,71 @@ These touch **shared auth infra** — review deliberately before wiring:
    fresh budget), so both answer `AtomSpace mirror service unavailable; retry shortly.` — worded
    as unavailability rather than remote fault, since a budget refusal never touches the network.
 
-6. **Mounting the dedicated entrypoint (OPEN — blocked on product decisions, not on code)** —
-   `AtomspaceEntrypoint.handle` answers one parsed request object and is reached by no HTTP path or
-   stdio transport yet. Mounting owns the concerns it deliberately does not: which host/path the
-   dedicated toolset is served on, batched requests, notification suppression for an id-less request,
-   session handling, and HTTP status mapping (the authorization denial is a
+6. **Mounting the dedicated entrypoint** — `AtomspaceEntrypoint.handle` answers one parsed
+   request object. Mounting owns the concerns it deliberately does not: which host/path the
+   dedicated toolset is served on, batched requests, notification suppression for an id-less
+   request, session handling, and HTTP status mapping (the authorization denial is a
    200-with-JSON-RPC-error, not a 403). Public Deck tools stay **scope-free** — none declares a
    `required_scope`, and nothing here invents one for them.
 
-   **WHY THIS IS NOT YET IMPLEMENTABLE WITHOUT GUESSING.** Every existing transport pattern in this
-   repo answers "serve the ONE public tool table", and none of them generalizes to a second,
-   separately-authorized table:
+   **LANDED.** The four decisions below were taken (Lake, 2026-10-02) and the mount is in:
 
-   - **No host/path is specified anywhere.** `RackApp#call` dispatches on an exhaustive
-     `[method, path]` `case`, and `HostAuthorization::ALLOWED_HOSTS` is a fixed six-entry allowlist
-     (`127.0.0.1[:3002]`, `localhost[:3002]`, `mcp.hyperon.dev`, `dev-mcp.hyperon.dev`). The
-     dedicated toolset needs either a new path on the existing host or a new host, and the choice is
-     externally visible: `README-OPS.md` documents nginx proxying `mcp.hyperon.dev` → `127.0.0.1:3002`
-     with the Host header rewritten, and `handle_root`'s advertised `endpoints` map plus
-     `/.well-known/*` `scopes_supported` would both have to change. No ENV var, service file, nginx
-     config, or doc in this repo names a second port, host, or path for AtomSpace.
-   - **A path-mount would put a registry seam reference in `rack_app.rb`,** which is exactly the
-     review trigger `spec/server/tools/atomspace/wiring_spec.rb` records ("a seam reference appearing
-     in a THIRD file … most importantly in a public dispatch path, which is how the dedicated toolset
-     would quietly become a filter on the public one"). That is a deliberate stop, not an obstacle to
-     route around.
-   - **Session, batch, and notification semantics cannot be inherited mechanically.** `RackApp`
-     delegates all three to `MCP::Server#handle` → `JsonRpcHandler.handle`, which owns array/batch
-     handling, hoists a single-element batch out of its array, drops id-less notifications by
-     returning `nil`, and validates ids against `DEFAULT_ALLOWED_ID_CHARACTERS`.
-     `AtomspaceEntrypoint.handle` answers one Hash and implements none of it. Reusing
-     `JsonRpcHandler` directly, building a second `MCP::Server` whose tool table is `Registry::TOOLS`,
-     or hand-rolling the batch/notification rules are three different designs with different
-     blast radii — and a second `MCP::Server` reintroduces the shared-mutable-`server_context`
-     problem `DISPATCH_LOCK` exists to solve, for a second server with its own lock.
-   - **stdio has no authenticated principal at all.** `bin/mcp-server` builds one
-     `StdioTransport` over the default identity with no Bearer token, no session, and no
-     `read_grant`; a stdio AtomSpace entrypoint would have no `RequestContext` to pass and would
-     either deny everything or need a new local-trust story.
+   - **(a) Path, not host.** `RackApp::ATOMSPACE_PATH = "/mcp/atomspace"` on the existing
+     `mcp.hyperon.dev` / `127.0.0.1:3002`, both spellings (`/mcp/atomspace` and
+     `/mcp/atomspace/`) as `/mcp` and `/sse` already do. `HostAuthorization::ALLOWED_HOSTS`,
+     the nginx story in `README-OPS.md`, and the service file are **untouched** — a second host
+     or port would have needed all three changed to serve a toolset no principal can use yet.
+   - **(b) `JsonRpcHandler`-equivalent envelope over the entrypoint, not a second
+     `MCP::Server`.** `Server::AtomspaceJsonRpc` (`server/atomspace_json_rpc.rb`) owns batch
+     handling, notification suppression, and request-shape validation, then delegates each
+     request object to `AtomspaceEntrypoint.handle`. A second `MCP::Server` would have
+     reintroduced the shared-mutable-`server_context` problem `DISPATCH_LOCK` exists to solve,
+     for a second server with its own lock; routing through `handle_mcp_message` would have made
+     the dedicated toolset a **filter** on the public one, which step 2 forbids.
+   - **(c) stdio out of scope.** `bin/mcp-server` still builds one `StdioTransport` over the
+     default identity with no Bearer token, no session, and no `read_grant`, so it has no
+     `RequestContext` to pass. Unchanged by this slice.
+   - **(d) Not advertised.** `handle_root`'s `endpoints` map and every `/.well-known` document
+     are unchanged, including `scopes_supported` (still `mcp:read mcp:write mcp:admin`, no
+     `mcp:atomspace:read`). Advertising follows the deck-side grant, not the mount: a path whose
+     every call a client would be denied is an invitation to a retry loop over a decision that
+     will not change.
 
-   **DECISION NEEDED before this can land:** (a) host and path (new path on `mcp.hyperon.dev`, or a
-   separate host/port that `ALLOWED_HOSTS` and nginx must learn); (b) whether the dedicated path is
-   served by a second `MCP::Server` instance, by `JsonRpcHandler` over `AtomspaceEntrypoint`, or by
-   the entrypoint growing its own batch/notification handling; (c) whether stdio is in scope at all,
-   and if so what principal it runs as; (d) whether `/.well-known` discovery and `handle_root`
-   advertise the dedicated endpoint publicly.
+   **Why the envelope layer is its own file, and why it borrows rather than invents.** Every
+   structural answer is produced by `JsonRpcHandler`'s own predicates (`valid_version?`,
+   `valid_id?`, `valid_method_name?`, `valid_params?`), its own error codes, and its own
+   `error_response` builder — so an empty batch, a wrong `jsonrpc`, an unusable id, non-object
+   `params`, an id-less notification, and a single-element batch all answer **exactly** as the
+   public path answers them (asserted by comparing to `JsonRpcHandler.handle` directly, not by
+   re-describing it). A second dialect on the same host would mean no client could write one
+   correct request for both. `JsonRpcHandler` is not used to build the whole response because it
+   can only express the five standard JSON-RPC codes, and the denial this toolset exists to make
+   is `-32002`. **One deliberate divergence:** a non-Hash batch member, where the gem raises
+   `TypeError` out of `request[:id]`; the mount answers Invalid Request with the gem's own code,
+   message and null id instead.
+
+   **What the mount does NOT take.** No `DISPATCH_LOCK`, no `DispatchDeadline`. Both absences are
+   correct rather than overlooked: there is no shared mutable state to serialize (the
+   `RequestContext` and `server_context` travel as arguments), and the deadline is documented as
+   bounding how long the shared lock is **held** — arming it where no lock is taken would bound
+   nothing and would start failing slow-but-working reads. Outbound calls keep their per-attempt
+   `HttpTimeouts` budget.
+
+   **Authentication is the EXISTING gate, now in one place.** `RackApp#authentication_refusal`
+   was extracted from `handle_mcp_message` and is called by both paths, so the 2026-06-14
+   incident's gate cannot be reopened by a new path written without it. A trusted same-box caller
+   is **admitted** (it is trusted by deployment) and **authorized nothing** — it holds no deck
+   grant, so it gets an empty `tools/list` and a `-32002` on `tools/call`. Admission is not
+   authorization.
+
+   **Review trigger did not fire, and is now asserted directly.** `spec/server/tools/atomspace/
+   wiring_spec.rb` records that *no* registry seam is referenced from `rack_app.rb` or from the
+   envelope layer — only from `atomspace_entrypoint.rb`. The authorization decision stays in one
+   file; the mount reads its answer.
+
+   **Still deck-side, still not implemented here:** which principals hold `mcp:atomspace:read`
+   (`McpApi::AtomspaceGrants`, POLICY REV4). Until that grant is real, every authenticated call
+   on this path is denied `-32002` by design, which is why (d) holds.
 
 
 Deck side (hyperon-wiki, separate branch): `Api::Mcp::AtomspaceMirrorController` + routes

@@ -6,6 +6,12 @@ require "rack"
 require "securerandom"
 require "uri"
 
+# The dedicated AtomSpace path's own JSON-RPC layer. Required here because this file MOUNTS
+# it; the registry seams it ultimately reaches stay where they were, referenced only from
+# Server::AtomspaceEntrypoint (see spec/server/tools/atomspace/wiring_spec.rb, which is what
+# keeps the dedicated toolset from becoming a filter on the public one).
+require_relative "server/atomspace_json_rpc"
+
 module Hyperon
   module Wiki
     module Mcp
@@ -143,6 +149,17 @@ module Hyperon
         # Cached health response TTL (seconds)
         HEALTH_CACHE_TTL = 30
 
+        # Where the dedicated AtomSpace toolset is served.
+        #
+        # A PATH on this host, not a new host or port: HostAuthorization::ALLOWED_HOSTS
+        # is a fixed allowlist and README-OPS documents nginx proxying mcp.hyperon.dev
+        # to 127.0.0.1:3002 with the Host header rewritten, so a second host or port
+        # would need an nginx change, a service-file change, and a doc change to serve
+        # a toolset no principal can use yet. Under /mcp/ because that is where every
+        # MCP transport on this host already lives (/mcp, /sse, /messages), and the
+        # name says which toolset rather than which protocol version.
+        ATOMSPACE_PATH = "/mcp/atomspace"
+
         # One lock for every #handle on the shared MCP::Server. Its context is
         # shared mutable state: a per-user dispatch swaps it for the duration
         # of that request, so any #handle running alongside -- per-user or
@@ -265,6 +282,15 @@ module Hyperon
                ["POST", "/mcp"], ["POST", "/mcp/"],
                ["POST", "/message"], ["POST", "/messages"]
             handle_mcp_message(request, env, session_id)
+
+          # The dedicated AtomSpace toolset. A path on THIS host rather than a new
+          # host or port, so HostAuthorization::ALLOWED_HOSTS and the nginx story
+          # are untouched; named under /mcp/ because every MCP transport on this
+          # host already lives there, and both spellings are accepted because
+          # /sse and /mcp already accept theirs. Nothing advertises it yet -- see
+          # #handle_atomspace_message.
+          when ["POST", ATOMSPACE_PATH], ["POST", "#{ATOMSPACE_PATH}/"]
+            handle_atomspace_message(request, env, session_id)
 
           when ["DELETE", "/sse"], ["DELETE", "/sse/"], ["DELETE", "/mcp"], ["DELETE", "/mcp/"]
             handle_session_delete(incoming_session_id, session_id)
@@ -594,23 +620,11 @@ module Hyperon
             principal = resolve_bearer_principal(env)
 
             # Fail closed: a request without a valid per-user token is rejected
-            # unless it is a trusted same-box caller (localhost origin + shared
-            # secret). This is independent of OAUTH_REQUIRE_AUTH / oauth_enabled?
-            # so a missing or degraded OAuth stack can never widen external
-            # access to the default identity.
-            if principal.nil? && !self.class.trusted_local_caller?(env)
-              issuer_url = self.class.oauth_issuer_url
-              headers = add_mcp_headers({
-                                          "Content-Type" => "application/json",
-                                          "WWW-Authenticate" => "Bearer resource_metadata=" \
-                                                                "\"#{issuer_url}/.well-known/oauth-protected-resource\""
-                                        }, session_id)
-              return [401, headers, [JSON.generate({
-                                                     jsonrpc: "2.0",
-                                                     id: nil,
-                                                     error: { code: -32001, message: "Authentication required" }
-                                                   })]]
-            end
+            # unless it is a trusted same-box caller. The gate itself lives in
+            # #authentication_refusal so the dedicated AtomSpace path cannot
+            # grow a second, subtly different copy of it.
+            refusal = authentication_refusal(principal, env, session_id)
+            return refusal if refusal
 
             request_data = JSON.parse(body, symbolize_names: true)
 
@@ -653,6 +667,124 @@ module Hyperon
           self.class.session_manager.delete(incoming_session_id) if incoming_session_id
           headers = add_mcp_headers({ "Content-Type" => "application/json" }, session_id)
           [200, headers, [JSON.generate({ status: "session closed" })]]
+        end
+
+        # THE authentication gate, for every MCP path on this host.
+        #
+        # One method rather than one per path, because this is the gate the 2026-06-14
+        # incident opened: the hosted server served no-token requests through a
+        # privileged DEFAULT identity. A second path with its own copy of these four
+        # lines is how that reopens -- not by someone removing the gate, but by a new
+        # path being written without it, or with an `oauth_enabled?` check in front of
+        # it. The dedicated AtomSpace path calls this one.
+        #
+        # Independent of OAUTH_REQUIRE_AUTH and oauth_enabled? on purpose, so a missing
+        # or degraded OAuth stack can never widen external access to the default
+        # identity. A trusted same-box caller (localhost origin + the X-MCP-Local
+        # shared secret) is admitted with NO principal: admission is not
+        # authorization, and what such a caller may then do is decided downstream --
+        # for the AtomSpace path, by a context it does not have.
+        #
+        # @return [Array, nil] a 401 Rack response, or nil when the request may proceed
+        def authentication_refusal(principal, env, session_id)
+          return nil unless principal.nil?
+          return nil if self.class.trusted_local_caller?(env)
+
+          issuer_url = self.class.oauth_issuer_url
+          headers = add_mcp_headers({
+                                      "Content-Type" => "application/json",
+                                      "WWW-Authenticate" => "Bearer resource_metadata=" \
+                                                            "\"#{issuer_url}/.well-known/oauth-protected-resource\""
+                                    }, session_id)
+          [401, headers, [JSON.generate({
+                                          jsonrpc: "2.0",
+                                          id: nil,
+                                          error: { code: -32001, message: "Authentication required" }
+                                        })]]
+        end
+
+        # The dedicated AtomSpace toolset, over HTTP (INTEGRATION.md step 6).
+        #
+        # WHAT THIS DELIBERATELY DOES NOT TOUCH. The shared MCP::Server: not its tool
+        # table, not its shared mutable server_context, not DISPATCH_LOCK. A second
+        # MCP::Server whose table were Registry::TOOLS would reintroduce exactly the
+        # shared-mutable-context problem that lock exists to solve, for a second server
+        # with a second lock; and routing this path through #handle_mcp_message would
+        # make the dedicated toolset a FILTER on the public one, which Card 17184
+        # (decision 2026-06-08) forbids as an acceptance criterion. So the tool table
+        # reached here is the entrypoint's own, and the public table is not consulted.
+        #
+        # Which means no lock is taken and no deadline is armed, and both absences are
+        # correct rather than overlooked: there is no shared mutable state to serialize
+        # (the context travels as an argument), and DispatchDeadline is documented as
+        # bounding how long the shared lock is HELD -- arming it where no lock is taken
+        # would bound nothing and would start failing slow-but-working reads. Each
+        # tool's own outbound calls keep the per-attempt HttpTimeouts budget they
+        # already had.
+        #
+        # THE SAME AUTH, THE SAME CONTEXT. Authentication is #authentication_refusal --
+        # the one gate every MCP path shares -- and an authenticated request's
+        # RequestContext is #build_request_context's, read through that principal's own
+        # Auth. Nothing about identity is re-derived here.
+        #
+        # NOT ADVERTISED. #handle_root's `endpoints` map and the /.well-known documents
+        # are untouched, because the deck-side mcp:atomspace:read grant is not real yet
+        # (POLICY REV4 lives in the deck repo): advertising a path whose every call a
+        # client would be denied is an invitation to a retry loop over a decision that
+        # will not change. Advertising follows the grant, not the mount.
+        #
+        # STATUS MAPPING, stated because it is the contract this slice introduces: an
+        # authenticated caller whose grant does not authorize the scope gets HTTP 200
+        # carrying JSON-RPC -32002, never 401 or 403. The transport exchange succeeded
+        # and the credential is valid; only the authorization failed, and neither
+        # re-presenting the credential (401) nor a transport-level refusal (403) says
+        # that. A notification answers 200 with an EMPTY body, which is how an id-less
+        # request is answered with nothing over HTTP.
+        def handle_atomspace_message(request, env, session_id)
+          principal = resolve_bearer_principal(env)
+          refusal = authentication_refusal(principal, env, session_id)
+          return refusal if refusal
+
+          body = request.body.read
+          headers = add_mcp_headers({ "Content-Type" => "application/json" }, session_id)
+
+          begin
+            response = dispatch_atomspace(JSON.parse(body.to_s, symbolize_names: true), principal)
+            [200, headers, [response.nil? ? "" : JSON.generate(response)]]
+          rescue JSON::ParserError => e
+            [400, headers, [JSON.generate({
+                                            jsonrpc: "2.0", id: nil,
+                                            error: { code: -32700, message: "Parse error", data: e.message }
+                                          })]]
+          rescue StandardError => e
+            [500, headers, [JSON.generate({
+                                            jsonrpc: "2.0", id: nil,
+                                            error: { code: -32603, message: "Internal error", data: e.message }
+                                          })]]
+          end
+        end
+
+        # The context and the tools one AtomSpace request runs under.
+        #
+        # A trusted same-box caller reaches here with NO principal, and is given no
+        # context: it holds nothing a deck read produced, so it is authorized nothing
+        # and every tool it names is denied. The server's default Tools are still what
+        # a call would run against if one were ever authorized -- the same identity
+        # that path uses everywhere else -- so the denial comes from the absent
+        # context rather than from an absent tool table.
+        def dispatch_atomspace(request_data, principal)
+          server_context = { magi_tools: atomspace_magi_tools(principal) }
+          Hyperon::Wiki::Mcp::Server::AtomspaceJsonRpc.dispatch(
+            request_data,
+            context: principal && build_request_context(principal),
+            server_context: server_context
+          )
+        end
+
+        def atomspace_magi_tools(principal)
+          return principal.tools if principal
+
+          self.class.mcp_server_instance&.server_context&.dig(:magi_tools)
         end
 
         # rubocop:disable Metrics/MethodLength

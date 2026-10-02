@@ -24,8 +24,20 @@
 # enforcement." A seam reference appearing in a THIRD file is the review trigger now -- most
 # importantly in a public dispatch path, which is how the dedicated toolset would quietly become
 # a filter on the public one. This half is still DESIGNED TO FAIL when wiring moves or spreads
-# (a second dedicated entrypoint, a stdio variant, a mount in rack_app), and that failure is
-# still a review trigger rather than a regression.
+# (a second dedicated entrypoint, a stdio variant, a seam reference in rack_app), and that
+# failure is still a review trigger rather than a regression.
+#
+# THE MOUNT HAS SINCE LANDED, and this half deliberately did NOT fire. INTEGRATION.md step 6
+# mounted the dedicated toolset at RackApp::ATOMSPACE_PATH, served by
+# Server::AtomspaceJsonRpc over Server::AtomspaceEntrypoint. Neither of those two files
+# reaches a registry seam: the envelope layer handles batch/notification structure and
+# delegates every tool decision to the entrypoint, and rack_app only resolves the principal,
+# builds the RequestContext it already built, and calls the envelope layer. So the mount is
+# the case this baseline was watching for -- a public dispatch path adjacent to the toolset --
+# and it stayed on the correct side of the line. The negative is now asserted DIRECTLY
+# (see "the mount reaches no registry seam") rather than inferred from the keys list, because
+# "rack_app happens not to appear in a hash" is a weaker statement than "rack_app names no
+# seam", and the mount is exactly where the difference would matter.
 #
 # WHAT THIS IS NOT:
 #   - It is NOT authorization coverage. It proves nothing about who may call these tools.
@@ -93,6 +105,17 @@ module AtomspaceWiringBaseline
   # The one file expected to reach the registry's seams. Any other file appearing in the scan is
   # the review trigger -- especially a public dispatch path.
   WIRING_RELATIVE_PATH = "lib/hyperon/wiki/mcp/server/atomspace_entrypoint.rb"
+
+  # The files INTEGRATION.md step 6's mount added or changed, named explicitly so the
+  # "no seam here" assertion is about the mount rather than about whatever happens not to
+  # appear in the scan. rack_app.rb is a public dispatch path; the envelope layer sits
+  # between it and the entrypoint. Neither may reach a registry seam: the authorization
+  # decision belongs to the entrypoint alone, and a seam reaching either of these would be
+  # the dedicated toolset starting to decide authorization in two places.
+  MOUNT_RELATIVE_PATHS = [
+    "lib/hyperon/wiki/mcp/rack_app.rb",
+    "lib/hyperon/wiki/mcp/server/atomspace_json_rpc.rb"
+  ].freeze
 
   # Raised instead of quietly reporting "absent" when source cannot be read as expected.
   class UnsupportedSourceShape < StandardError; end
@@ -480,6 +503,30 @@ RSpec.describe "AtomSpace wiring baseline (textual, temporary)" do
       named = references.fetch(AtomspaceWiringBaseline::WIRING_RELATIVE_PATH, [])
 
       expect(named).to include("visible_for_context", "gate_for_context!")
+    end
+
+    # The mount, asserted directly rather than inferred from the keys list above. The
+    # distinction matters because a seam reference in rack_app would make the public
+    # dispatch path itself an authorization decision point, and a seam reference in the
+    # envelope layer would put the SAME decision in two files -- the shape that lets one
+    # drift away from the other. Both read the entrypoint's answer and neither re-derives it.
+    AtomspaceWiringBaseline::MOUNT_RELATIVE_PATHS.each do |relative_path|
+      it "records that #{relative_path} reaches no registry seam" do
+        named = references.fetch(relative_path, [])
+
+        expect(named).to be_empty,
+                         "#{relative_path} now names #{named.inspect}. The mount must delegate " \
+                         "every authorization decision to the dedicated entrypoint; a seam here " \
+                         "is either a filter on the public table or a second decision point."
+      end
+    end
+
+    # The premise the three examples above rest on: these files are actually scanned. A
+    # typo'd path would make every "reaches no seam" example pass vacuously.
+    it "actually scans the mount files it clears" do
+      scanned = AtomspaceWiringBaseline.scanned_paths
+
+      expect(scanned).to include(*AtomspaceWiringBaseline::MOUNT_RELATIVE_PATHS)
     end
   end
 

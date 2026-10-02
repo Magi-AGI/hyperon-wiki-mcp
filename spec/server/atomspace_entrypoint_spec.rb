@@ -32,9 +32,14 @@ require_relative "../../lib/hyperon/wiki/mcp/server/tools/search_cards"
 #
 # WHAT THIS SPEC DOES NOT CLAIM: nothing about which principals the deck grants
 # mcp:atomspace:read (owned by McpApi::AtomspaceGrants, deck repo), nothing about
-# token issuance carrying a scope claim (INTEGRATION.md step 1, still open), and
-# nothing about HTTP mounting. Local and offline: in-process grant results and a
-# stubbed magi_tools, no client, no token fetch, no network.
+# token issuance carrying a scope claim (INTEGRATION.md step 1, landed separately),
+# and nothing about HTTP mounting -- the mount landed as INTEGRATION.md step 6 and is
+# covered by spec/hyperon/wiki/mcp/rack_app_atomspace_mount_spec.rb (path dispatch,
+# auth gate, status mapping) and spec/server/atomspace_json_rpc_spec.rb (batch,
+# notification, request-shape). This file stays on the one question it was written
+# for: given a context, what does this entrypoint list and allow. Local and offline:
+# in-process grant results and a stubbed magi_tools, no client, no token fetch, no
+# network.
 
 RSpec.describe Hyperon::Wiki::Mcp::Server::AtomspaceEntrypoint do
   let(:entrypoint) { described_class }

@@ -53,16 +53,19 @@ module Hyperon
         #
         # WHAT THIS DOES NOT DO. It decides nothing about which principals the deck
         # grants mcp:atomspace:read (owned by McpApi::AtomspaceGrants in the deck
-        # repo, POLICY REV4), and it is not yet mounted on any HTTP path or stdio
-        # transport. Nor is it reached by the gem's own inbound token now carrying
-        # a signed `scope` claim (INTEGRATION.md step 1): that claim is issued and
-        # verified by OAuth::TokenIssuer, whereas the grant consulted here comes
+        # repo, POLICY REV4). Nor is it reached by the gem's own inbound token now
+        # carrying a signed `scope` claim (INTEGRATION.md step 1): that claim is issued
+        # and verified by OAuth::TokenIssuer, whereas the grant consulted here comes
         # from Auth#read_grant against the DECK's token and the DECK's JWKS -- two
         # different credentials, and mcp:atomspace:read lives only in the latter.
         # Transport concerns are out of scope here on purpose: batched requests,
         # notification suppression for an id-less request, session handling, and
         # HTTP status mapping all belong to whichever slice mounts this, and this
-        # module answers every request object it is handed.
+        # module answers every request object it is handed. Those concerns now live in
+        # Server::AtomspaceJsonRpc (the envelope) and RackApp#handle_atomspace_message
+        # (the HTTP mount, at RackApp::ATOMSPACE_PATH) -- INTEGRATION.md step 6. stdio
+        # is still out of scope: it has no authenticated principal to build a context
+        # from.
         module AtomspaceEntrypoint
           # JSON-RPC implementation-defined server error (-32000..-32099): the
           # caller authenticated, and its own grant read does not authorize this
