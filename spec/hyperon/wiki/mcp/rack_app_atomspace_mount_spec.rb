@@ -10,9 +10,13 @@
 #       problem DISPATCH_LOCK exists to solve, for a second server with its own lock;
 #   (c) stdio stays out of scope: bin/mcp-server has no Bearer token, no session, and no
 #       read_grant, so it has no RequestContext to pass;
-#   (d) nothing advertises the path yet -- not handle_root's `endpoints`, not any
-#       /.well-known document -- because the deck-side mcp:atomspace:read grant is not real
-#       yet and advertising a path no principal can use is an invitation to a 403 loop.
+#   (d) the dedicated PATH is still unadvertised -- not in handle_root's `endpoints`, not in
+#       any /.well-known document -- but the SCOPE now is: the three /.well-known documents
+#       name mcp:atomspace:read in `scopes_supported` so a client can discover the scope
+#       exists on this resource and go ask the deck for it. Advertising a scope is not
+#       granting it, which the "advertisement is not authorization" examples below hold in
+#       place: the gem mints the scope for no role and denies every call made without a
+#       verified deck-issued grant.
 #
 # WHAT THIS FILE PINS, and why each has a plausible wrong implementation:
 #
@@ -408,9 +412,19 @@ RSpec.describe Hyperon::Wiki::Mcp::RackApp, "AtomSpace mount" do
     end
   end
 
-  # (d): nothing advertises the dedicated path. A client that cannot discover it cannot be
-  # sent into a denial loop by a grant the deck does not issue yet.
+  # Advertisement and authorization are two different decisions, and this block pins both
+  # halves. The three /.well-known documents now name mcp:atomspace:read in
+  # scopes_supported so a client can DISCOVER the scope and go ask the deck for it; the
+  # dedicated path is still absent from handle_root's `endpoints`, nothing here mints the
+  # scope, and a call made without a verified deck grant is still denied. A discovery
+  # document is a catalogue, not a key.
   describe "discovery" do
+    let(:all_well_known) do
+      ["/.well-known/oauth-protected-resource",
+       "/.well-known/oauth-authorization-server",
+       "/.well-known/openid-configuration"]
+    end
+
     def json_get(path)
       _status, _headers, response = app.call(env_for(path, body: "", method: "GET", token: nil))
       JSON.parse(response.first)
@@ -424,34 +438,120 @@ RSpec.describe Hyperon::Wiki::Mcp::RackApp, "AtomSpace mount" do
       expect(JSON.generate(root)).not_to match(/atomspace/i)
     end
 
-    it "does not advertise the AtomSpace scope in protected-resource metadata" do
+    it "advertises the AtomSpace scope in protected-resource metadata" do
       document = json_get("/.well-known/oauth-protected-resource")
 
-      expect(document["scopes_supported"]).to eq(["mcp:read", "mcp:write", "mcp:admin"])
-      expect(JSON.generate(document)).not_to match(/atomspace/i)
+      expect(document["scopes_supported"]).to eq(["mcp:read", "mcp:write", "mcp:admin", scope])
     end
 
-    it "does not advertise the AtomSpace scope or path in authorization-server metadata" do
+    it "advertises the AtomSpace scope in authorization-server metadata" do
       document = json_get("/.well-known/oauth-authorization-server")
 
-      expect(document["scopes_supported"]).to eq(["mcp:read", "mcp:write", "mcp:admin"])
-      expect(JSON.generate(document)).not_to match(/atomspace/i)
+      expect(document["scopes_supported"]).to eq(["mcp:read", "mcp:write", "mcp:admin", scope])
     end
 
-    it "does not advertise the AtomSpace scope or path in the OpenID configuration" do
+    it "advertises the AtomSpace scope in the OpenID configuration" do
       document = json_get("/.well-known/openid-configuration")
 
-      expect(document["scopes_supported"]).to eq(["mcp:read", "mcp:write", "mcp:admin"])
-      expect(JSON.generate(document)).not_to match(/atomspace/i)
+      expect(document["scopes_supported"]).to eq(["mcp:read", "mcp:write", "mcp:admin", scope])
     end
 
-    # The path is reachable, and still unadvertised. Without this the examples above would be
-    # satisfied by a mount that did not exist: "no document mentions it" is trivially true of a
-    # path nobody serves, and the point here is that serving and advertising are separable.
+    # One scope list behind all three documents: a client that reads whichever document it
+    # prefers must not get a different answer about what this resource supports.
+    it "advertises the same scope list in every well-known document" do
+      advertised = all_well_known.to_h { |path| [path, json_get(path)["scopes_supported"]] }
+
+      expect(advertised.values.uniq.size).to eq(1)
+      advertised.each_value { |scopes| expect(scopes).to include(scope) }
+    end
+
+    # Advertising a scope must not add a path to the catalogue. The mount stays
+    # undiscoverable even though the scope it needs is now nameable.
+    it "advertises the scope without advertising the path" do
+      all_well_known.each do |path|
+        expect(JSON.generate(json_get(path))).not_to match(%r{/mcp/atomspace})
+      end
+    end
+
+    # The path is reachable, and still only reachable WITH a grant. Without this the
+    # examples above would be satisfied by a mount that did not exist: "the scope is
+    # named" is trivially cheap, and the point here is that naming and granting are
+    # separable.
     it "serves the path it does not advertise" do
       status, = post_atomspace(listing)
 
       expect(status).to eq(200)
+    end
+  end
+
+  # The half that advertising must not move. Each example reads a well-known document
+  # first -- so the scope really is advertised at the moment of the call -- and then shows
+  # the call failing anyway, for want of a grant the deck did not issue.
+  describe "advertisement is not authorization" do
+    def advertised_scopes
+      _status, _headers, response = app.call(
+        env_for("/.well-known/oauth-protected-resource", body: "", method: "GET", token: nil)
+      )
+      JSON.parse(response.first)["scopes_supported"]
+    end
+
+    it "still denies tools/call to an authenticated principal whose grant omits the scope" do
+      allow(per_user_auth).to receive(:read_grant).and_return(deck_only_grant)
+
+      expect(advertised_scopes).to include(scope)
+
+      status, _headers, body = post_atomspace(space_stats_call)
+
+      expect(status).to eq(200)
+      expect(body).not_to have_key("result")
+      expect(body.dig("error", "code")).to eq(entrypoint::AUTHORIZATION_DENIED)
+      expect(body.dig("error", "data", "reason")).to match(/#{Regexp.escape(scope)}/)
+    end
+
+    it "still advertises nothing on tools/list to a principal whose grant omits the scope" do
+      allow(per_user_auth).to receive(:read_grant).and_return(deck_only_grant)
+
+      expect(advertised_scopes).to include(scope)
+
+      _status, _headers, body = post_atomspace(listing)
+
+      expect(body.dig("result", "tools")).to be_empty
+    end
+
+    # An unauthenticated caller is refused by the authentication gate before any grant is
+    # read: the advertised scope does not make the credential optional.
+    it "still refuses an unauthenticated request with 401 and reads no grant" do
+      expect(advertised_scopes).to include(scope)
+
+      status, headers, body = post_atomspace(listing, token: nil)
+
+      expect(status).to eq(401)
+      expect(body.dig("error", "code")).to eq(-32_001)
+      expect(headers["WWW-Authenticate"]).to include("resource_metadata=")
+      expect(per_user_auth).not_to have_received(:read_grant)
+    end
+
+    # A grant the gem could not verify is not a grant. Advertising the scope does not
+    # downgrade an unverifiable deck read into an authorization.
+    it "still denies a call when the grant read cannot complete" do
+      allow(per_user_auth).to receive(:read_grant).and_raise(StandardError, "deck unreachable")
+
+      expect(advertised_scopes).to include(scope)
+
+      _status, _headers, body = post_atomspace(space_stats_call)
+
+      expect(body.dig("error", "code")).to eq(entrypoint::AUTHORIZATION_DENIED)
+    end
+
+    # The thing that would actually turn advertisement into authorization: the gem minting
+    # the scope into its own credential. #scope_for_role is the only place that maps a role
+    # to an issued scope, and it must not name the AtomSpace scope for any role.
+    it "mints the AtomSpace scope for no role" do
+      roles = ["admin", "gm", "player", "", nil, "Raw Data Analyst"]
+      minted = roles.map { |role| app.send(:scope_for_role, role) }
+
+      expect(minted).to eq(["mcp:admin", "mcp:write", "mcp:read", "mcp:read", "mcp:read", "mcp:read"])
+      expect(minted).not_to include(scope)
     end
   end
 

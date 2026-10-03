@@ -160,6 +160,23 @@ module Hyperon
         # name says which toolset rather than which protocol version.
         ATOMSPACE_PATH = "/mcp/atomspace"
 
+        # The scopes the three /.well-known discovery documents advertise.
+        #
+        # ADVERTISEMENT IS NOT AUTHORIZATION, and this list is the only thing it
+        # changes. `mcp:atomspace:read` is named here so a client can DISCOVER that
+        # the scope exists on this resource and ask the deck for it; nothing on this
+        # side mints it. #scope_for_role still maps roles to mcp:read / mcp:write /
+        # mcp:admin and nothing else, so the gem's own issued credential can never
+        # carry the AtomSpace scope. The only thing that authorizes POST
+        # /mcp/atomspace is a verified deck-issued grant naming the scope, read
+        # through Auth#read_grant (McpApi::AtomspaceGrants, POLICY REV4, deck repo);
+        # without one every call on that path is still denied -32002.
+        #
+        # Shared by all three documents rather than repeated three times, so a scope
+        # cannot be advertised by one discovery document and withheld by another --
+        # a client that reads whichever document it prefers sees the same answer.
+        DISCOVERY_SCOPES_SUPPORTED = ["mcp:read", "mcp:write", "mcp:admin", "mcp:atomspace:read"].freeze
+
         # One lock for every #handle on the shared MCP::Server. Its context is
         # shared mutable state: a per-user dispatch swaps it for the duration
         # of that request, so any #handle running alongside -- per-user or
@@ -356,7 +373,7 @@ module Hyperon
                                           resource: issuer_url,
                                           authorization_servers: [issuer_url],
                                           bearer_methods_supported: ["header"],
-                                          scopes_supported: ["mcp:read", "mcp:write", "mcp:admin"]
+                                          scopes_supported: DISCOVERY_SCOPES_SUPPORTED
                                         })]]
         end
 
@@ -375,7 +392,7 @@ module Hyperon
                                           grant_types_supported:
                                             %w[authorization_code refresh_token client_credentials],
                                           token_endpoint_auth_methods_supported: %w[client_secret_post none],
-                                          scopes_supported: ["mcp:read", "mcp:write", "mcp:admin"]
+                                          scopes_supported: DISCOVERY_SCOPES_SUPPORTED
                                         })]]
         end
 
@@ -396,7 +413,7 @@ module Hyperon
                                           grant_types_supported:
                                             %w[authorization_code refresh_token client_credentials],
                                           token_endpoint_auth_methods_supported: %w[client_secret_post none],
-                                          scopes_supported: ["mcp:read", "mcp:write", "mcp:admin"],
+                                          scopes_supported: DISCOVERY_SCOPES_SUPPORTED,
                                           subject_types_supported: ["public"],
                                           id_token_signing_alg_values_supported: ["RS256"]
                                         })]]
@@ -727,11 +744,15 @@ module Hyperon
         # RequestContext is #build_request_context's, read through that principal's own
         # Auth. Nothing about identity is re-derived here.
         #
-        # NOT ADVERTISED. #handle_root's `endpoints` map and the /.well-known documents
-        # are untouched, because the deck-side mcp:atomspace:read grant is not real yet
-        # (POLICY REV4 lives in the deck repo): advertising a path whose every call a
-        # client would be denied is an invitation to a retry loop over a decision that
-        # will not change. Advertising follows the grant, not the mount.
+        # DISCOVERABLE, NOT AUTHORIZED. The three /.well-known documents now name
+        # `mcp:atomspace:read` in `scopes_supported` (DISCOVERY_SCOPES_SUPPORTED), so a
+        # client can learn the scope exists on this resource and go ask the deck for
+        # it. That is all advertisement does. #handle_root's `endpoints` map is still
+        # untouched, nothing on this side mints the scope (#scope_for_role is
+        # unchanged), and the only thing that authorizes a call here is a verified
+        # deck-issued grant naming it. Without that grant every call below is still
+        # denied -32002 -- which is what the examples in
+        # spec/hyperon/wiki/mcp/rack_app_atomspace_mount_spec.rb hold in place.
         #
         # STATUS MAPPING, stated because it is the contract this slice introduces: an
         # authenticated caller whose grant does not authorize the scope gets HTTP 200

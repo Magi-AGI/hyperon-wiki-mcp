@@ -136,11 +136,17 @@ These touch **shared auth infra** — review deliberately before wiring:
    - **(c) stdio out of scope.** `bin/mcp-server` still builds one `StdioTransport` over the
      default identity with no Bearer token, no session, and no `read_grant`, so it has no
      `RequestContext` to pass. Unchanged by this slice.
-   - **(d) Not advertised.** `handle_root`'s `endpoints` map and every `/.well-known` document
-     are unchanged, including `scopes_supported` (still `mcp:read mcp:write mcp:admin`, no
-     `mcp:atomspace:read`). Advertising follows the deck-side grant, not the mount: a path whose
-     every call a client would be denied is an invitation to a retry loop over a decision that
-     will not change.
+   - **(d) Path unadvertised, scope advertised.** `handle_root`'s `endpoints` map is unchanged,
+     so the dedicated path is still not discoverable. `scopes_supported` in all three
+     `/.well-known` documents (`oauth-protected-resource`, `oauth-authorization-server`,
+     `openid-configuration`) now names `mcp:atomspace:read` alongside
+     `mcp:read mcp:write mcp:admin`, from the single `RackApp::DISCOVERY_SCOPES_SUPPORTED`
+     list so the three documents cannot drift. **Advertising is not granting:** a discovery
+     document tells a client the scope exists on this resource so it can go ask the deck for
+     it; `#scope_for_role` still mints only `mcp:read` / `mcp:write` / `mcp:admin`, and every
+     call on the path without a verified deck-issued grant naming the scope is still denied
+     `-32002`. `spec/hyperon/wiki/mcp/rack_app_atomspace_mount_spec.rb` pins both halves in
+     its `discovery` and `advertisement is not authorization` blocks.
 
    **Why the envelope layer is its own file, and why it borrows rather than invents.** Every
    structural answer is produced by `JsonRpcHandler`'s own predicates (`valid_version?`,
@@ -180,9 +186,11 @@ These touch **shared auth infra** — review deliberately before wiring:
    principals, API keys allowlist-only, `mcp:admin` never implied — and the Deck→gem claim contract
    (space-delimited `scope` string, header `kid` matching the JWKS, `iss`, and an admin/RDA
    principal reaching `authorization_valid_now?`) has been verified end to end against both repos'
-   real code. It is **not merged and not deployed**, so (d) still holds: advertising follows the
-   grant being real in the target environment, not the grant existing on a branch. Until then every
-   authenticated call on this path is denied `-32002` by design.
+   real code. It is **not merged and not deployed**, so the PATH stays unadvertised: a client that
+   cannot discover the path cannot be sent into a retry loop over a decision that will not change
+   yet. The SCOPE is advertised regardless, because naming a scope in a discovery document is how a
+   client learns what to request from the deck — it authorizes nothing. Until the deck grant is live
+   in the target environment, every authenticated call on this path is denied `-32002` by design.
 
 
 Deck side (hyperon-wiki, separate branch): `Api::Mcp::AtomspaceMirrorController` + routes
