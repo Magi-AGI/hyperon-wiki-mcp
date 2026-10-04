@@ -6,7 +6,7 @@
 # must not drive a change to lib/. Where the implementation accepts something
 # surprising (see "ACCEPTS" notes below), the surprise is written down as-is.
 #
-# Source under characterization: lib/hyperon/wiki/mcp/auth.rb:107 (#verify_token)
+# Source under characterization: lib/hyperon/wiki/mcp/auth.rb:281 (#verify_token)
 # and its private collaborators #fetch_jwks, #jwk_to_public_key, #decode_base64url.
 #
 # Verification pipeline as implemented:
@@ -348,7 +348,7 @@ RSpec.describe Hyperon::Wiki::Mcp::Auth do
       end
     end
 
-    # Claim and signature semantics of the real JWT.decode call at auth.rb:124.
+    # Claim and signature semantics of the real JWT.decode call at auth.rb:298.
     #
     # These examples used to stub #jwk_to_public_key with the public half of the
     # synthetic key, because the old set_key construction made step 5 impassable on

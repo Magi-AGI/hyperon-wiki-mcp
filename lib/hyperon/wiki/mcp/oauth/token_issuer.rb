@@ -38,11 +38,28 @@ module Hyperon
 
           # Issue a new access token
           #
+          # The `scope` claim is SIGNED rather than left to the OAuth token
+          # response body (INTEGRATION.md step 1). A scope is an authorization
+          # input, so a resource server must be able to read it from material the
+          # signature covers; a scope that travelled only in the response body was
+          # unverifiable, and the body and the credential could disagree about the
+          # same grant.
+          #
+          # The scope is taken, not derived. Mapping role -> scope in here would
+          # put an authorization decision behind a signing key, invisible to both
+          # the deck (which owns grants, POLICY REV4) and to a reader of the
+          # caller. The caller decides; this signs what it is given.
+          #
           # @param sub [String] subject (username)
           # @param role [String] user role (user/gm/admin)
           # @param session_id [String] unique session identifier
+          # @param scope [String, Array, nil] the scopes this credential is being
+          #   granted. Normalized to the space-delimited string RFC 6749 puts on
+          #   the wire -- the shape the deck emits too -- so a reader never has to
+          #   handle two shapes for one claim. Omitted entirely when nothing
+          #   usable is supplied; see #normalize_scope_claim.
           # @return [String] signed JWT token
-          def issue(sub:, role:, session_id:)
+          def issue(sub:, role:, session_id:, scope: nil)
             now = Time.now.to_i
             payload = {
               sub: sub,
@@ -52,6 +69,8 @@ module Hyperon
               iat: now,
               exp: now + @ttl
             }
+            normalized = normalize_scope_claim(scope)
+            payload[:scope] = normalized if normalized
 
             JWT.encode(payload, @signing_key, "RS256", { kid: @kid })
           end
@@ -98,6 +117,31 @@ module Hyperon
           end
 
           private
+
+          # The space-delimited scope claim to sign, or nil when nothing usable
+          # was supplied.
+          #
+          # nil, NOT an empty string, for the unusable cases. An empty claim is an
+          # assertion -- "this credential was granted nothing" -- while an omitted
+          # one is the honest "no scope was decided for this token". Both fail
+          # closed for a reader (Auth#scopes answers [] either way), but only
+          # absence stays truthful about what the signer actually knew.
+          #
+          # Unusable is defined by what a membership check can act on rather than
+          # by nil alone -- the same definition Registry.resolve_required_scope and
+          # RequestContext#authorizes_scope? already use. A nil or non-String
+          # element joined blindly would sign an empty scope between two
+          # separators: a scope nobody granted, sitting inside a signature.
+          def normalize_scope_claim(scope)
+            entries = case scope
+                      when String then scope.split
+                      when Array then scope.select { |entry| entry.is_a?(String) && !entry.strip.empty? }
+                      else return nil
+                      end
+
+            usable = entries.flat_map(&:split)
+            usable.empty? ? nil : usable.join(" ")
+          end
 
           # Load RSA key from env var or generate a new one
           def load_or_generate_key

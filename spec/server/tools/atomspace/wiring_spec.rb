@@ -1,21 +1,53 @@
 # frozen_string_literal: true
 
-# TEMPORARY BASELINE CHARACTERIZATION -- NOT A PERMANENT INVARIANT.
+# WIRING BASELINE -- half permanent invariant, half characterization. The halves are stated
+# separately below because they are enforced for different reasons and have different lifetimes.
 #
-# This spec records the *current* wiring state of the AtomSpace read toolset at the commit it
-# was written against: the eight tool classes are defined but registered by no entrypoint, and
-# no textual reference to Registry.visible_for or Registry.gate! appears in the files scanned.
+# UPDATED when the dedicated AtomSpace entrypoint landed
+# (lib/hyperon/wiki/mcp/server/atomspace_entrypoint.rb). The previous revision recorded that the
+# eight tool classes were registered by NO entrypoint and that NO textual reference to the
+# registry's seams existed anywhere. The second half of that is now false by design, and the
+# trigger it was built to fire did fire: the gate-reference example failed, which is what sent a
+# reviewer here instead of letting wiring land unreviewed. It is updated, not worked around.
 #
-# It is DESIGNED TO FAIL when AtomSpace wiring lands. That failure is the point -- it is a review
-# trigger, not a regression. When you hit it, update this baseline deliberately (and check that
-# invocation enforcement landed alongside visibility filtering, per INTEGRATION.md step 3:
-# "Visibility filtering alone is not enforcement"). Do not work around it.
+# THE PERMANENT HALF -- the public entrypoints register no AtomSpace tool class. This is not a
+# snapshot of current state; it is INTEGRATION.md step 2 (Card 17184, decision 2026-06-08,
+# recorded there as an acceptance criterion): the eight tools live in a dedicated toolset and
+# never in the public Hyperon Wiki MCP tool list, "not filtered or otherwise". Space-global
+# aggregates (space_stats, atom_count_by_type, atom_types) in particular must not reach the
+# public surface. If this half fails, something violated the acceptance criterion -- do not
+# update it to match, fix the registration.
+#
+# THE CHARACTERIZATION HALF -- the registry's seams are referenced from exactly one file, the
+# dedicated entrypoint, and that file references BOTH the visibility seam and the invocation
+# gate. The "both" is the point, per INTEGRATION.md step 3: "Visibility filtering alone is not
+# enforcement." A seam reference appearing in a THIRD file is the review trigger now -- most
+# importantly in a public dispatch path, which is how the dedicated toolset would quietly become
+# a filter on the public one. This half is still DESIGNED TO FAIL when wiring moves or spreads
+# (a second dedicated entrypoint, a stdio variant, a seam reference in rack_app), and that
+# failure is still a review trigger rather than a regression.
+#
+# THE MOUNT HAS SINCE LANDED, and this half deliberately did NOT fire. INTEGRATION.md step 6
+# mounted the dedicated toolset at RackApp::ATOMSPACE_PATH, served by
+# Server::AtomspaceJsonRpc over Server::AtomspaceEntrypoint. Neither of those two files
+# reaches a registry seam: the envelope layer handles batch/notification structure and
+# delegates every tool decision to the entrypoint, and rack_app only resolves the principal,
+# builds the RequestContext it already built, and calls the envelope layer. So the mount is
+# the case this baseline was watching for -- a public dispatch path adjacent to the toolset --
+# and it stayed on the correct side of the line. The negative is now asserted DIRECTLY
+# (see "the mount reaches no registry seam") rather than inferred from the keys list, because
+# "rack_app happens not to appear in a hash" is a weaker statement than "rack_app names no
+# seam", and the mount is exactly where the difference would matter.
 #
 # WHAT THIS IS NOT:
 #   - It is NOT authorization coverage. It proves nothing about who may call these tools.
+#     spec/server/atomspace_entrypoint_spec.rb is where the list/call authorization behaviour is
+#     actually witnessed, against real grant results and a real gate.
 #   - It establishes NOTHING about behavioural tool listing, MCP dispatch enforcement,
 #     invocation authorization, or Deck-side authorization.
 #   - It says nothing about contract scope, grant eligibility, or catalog separation.
+#   - A textual reference is not a CALL. That the entrypoint names both seams says nothing about
+#     whether it reaches them on every path; the behavioural spec covers that.
 #
 # METHOD: every check below reads first-party source as TEXT. It never requires or loads an
 # entrypoint -- config.ru and bin/mcp-server-rack-direct each construct a live Tools client at
@@ -30,10 +62,10 @@
 # examples below exercise those paths directly.
 #
 # RESIDUAL LIMITS, stated rather than papered over: aliases, dynamic or indirect registration,
-# and a third entrypoint are still invisible to a textual scan. The gate scan matches method-name
-# substrings -- including occurrences in comments and strings -- across lib/**/*.rb plus the two
-# entrypoints, and excludes registry.rb entirely because that file defines the methods. It is an
-# absence-of-textual-reference check over selected files, not exhaustive call-site analysis.
+# and a third entrypoint are still invisible to a textual scan. The seam scan matches method
+# names across lib/**/*.rb plus the two entrypoints -- including occurrences in comments and
+# strings -- and excludes registry.rb entirely because that file defines the methods. It is a
+# textual-reference check over selected files, not exhaustive call-site analysis.
 
 module AtomspaceWiringBaseline
   ROOT = File.expand_path("../../../..", __dir__)
@@ -50,7 +82,40 @@ module AtomspaceWiringBaseline
   # is refused: guessing is what produced the truncation bug this scanner replaced.
   CODE_CHARS = /[A-Za-z0-9_:,\s]/
 
-  GATE_METHODS = %w[visible_for gate!].freeze
+  # The registry's two seam families. Kept as separate families rather than one flat list
+  # because the assertion below is about BOTH being present in the wiring file: a file that
+  # named only the visibility seam would be the exact mistake INTEGRATION.md step 3 warns about.
+  #
+  # Word-anchored on purpose. An earlier revision matched the bare substring "visible_for",
+  # which also matches "visible_for_context" -- so a file referencing only the context-taking
+  # seam was indistinguishable from one referencing the array-taking one, and the two have
+  # different trust properties (the array-taking pair leaves freshness to the caller).
+  VISIBILITY_SEAMS = {
+    "visible_for" => /\bvisible_for\b/,
+    "visible_for_context" => /\bvisible_for_context\b/
+  }.freeze
+
+  GATE_SEAMS = {
+    "gate!" => /\bgate!/,
+    "gate_for_context!" => /\bgate_for_context!/
+  }.freeze
+
+  SEAMS = VISIBILITY_SEAMS.merge(GATE_SEAMS).freeze
+
+  # The one file expected to reach the registry's seams. Any other file appearing in the scan is
+  # the review trigger -- especially a public dispatch path.
+  WIRING_RELATIVE_PATH = "lib/hyperon/wiki/mcp/server/atomspace_entrypoint.rb"
+
+  # The files INTEGRATION.md step 6's mount added or changed, named explicitly so the
+  # "no seam here" assertion is about the mount rather than about whatever happens not to
+  # appear in the scan. rack_app.rb is a public dispatch path; the envelope layer sits
+  # between it and the entrypoint. Neither may reach a registry seam: the authorization
+  # decision belongs to the entrypoint alone, and a seam reaching either of these would be
+  # the dedicated toolset starting to decide authorization in two places.
+  MOUNT_RELATIVE_PATHS = [
+    "lib/hyperon/wiki/mcp/rack_app.rb",
+    "lib/hyperon/wiki/mcp/server/atomspace_json_rpc.rb"
+  ].freeze
 
   # Raised instead of quietly reporting "absent" when source cannot be read as expected.
   class UnsupportedSourceShape < StandardError; end
@@ -243,13 +308,15 @@ module AtomspaceWiringBaseline
     (lib_files - [REGISTRY_RELATIVE_PATH]) + ENTRYPOINTS
   end
 
-  # Textual references, not call-site analysis: substring matches, comments and strings included.
-  def gate_references
-    scanned_paths.each_with_object([]) do |relative_path, found|
+  # Textual references, not call-site analysis: word-anchored regex matches, comments and
+  # strings included. Returns { relative_path => [seam names] } so the examples can assert WHICH
+  # file references WHICH seam, not merely that the total is non-empty -- "some file somewhere
+  # names a seam" is what the previous absence check degenerated to once wiring landed.
+  def seam_references
+    scanned_paths.each_with_object({}) do |relative_path, found|
       source = read(relative_path)
-      GATE_METHODS.each do |method_name|
-        found << "#{relative_path}: #{method_name}" if source.include?(method_name)
-      end
+      named = SEAMS.filter_map { |name, pattern| name if source.match?(pattern) }
+      found[relative_path] = named unless named.empty?
     end
   end
 end
@@ -263,10 +330,16 @@ RSpec.describe "AtomSpace wiring baseline (textual, temporary)" do
       expect(helper.registry_tool_names.size).to eq(8)
     end
 
-    it "still finds visible_for and gate! defined in the registry" do
+    it "still finds all four registry seams defined in the registry" do
       source = helper.registry_source
       expect(source).to match(/def\s+visible_for\b/)
       expect(source).to match(/def\s+gate!/)
+      expect(source).to match(/def\s+visible_for_context\b/)
+      expect(source).to match(/def\s+gate_for_context!/)
+    end
+
+    it "still finds the wiring file the seam scan expects" do
+      expect(helper.read(AtomspaceWiringBaseline::WIRING_RELATIVE_PATH)).not_to be_empty
     end
   end
 
@@ -394,13 +467,88 @@ RSpec.describe "AtomSpace wiring baseline (textual, temporary)" do
     end
   end
 
-  describe "gate references in scanned source" do
-    it "records no textual reference to visible_for or gate! in the scanned files" do
-      references = helper.gate_references
+  describe "registry seam references in scanned source" do
+    let(:references) { helper.seam_references }
 
-      expect(references).to be_empty,
-                            "gate/visibility methods now referenced at: #{references.join("; ")}. " \
-                            "This baseline recorded none; update it deliberately."
+    # The characterization half. Records exactly one wiring file, so a seam reference appearing
+    # anywhere else -- above all in a public dispatch path -- fails here and sends a reviewer to
+    # this comment instead of landing silently.
+    it "records the dedicated entrypoint as the only file referencing a registry seam" do
+      expect(references.keys).to eq([AtomspaceWiringBaseline::WIRING_RELATIVE_PATH]), lambda {
+        "registry seams are now referenced at: #{references.inspect}. This baseline records only " \
+          "#{AtomspaceWiringBaseline::WIRING_RELATIVE_PATH}. If a new file legitimately wires the " \
+          "toolset, confirm it reaches the invocation gate and not visibility filtering alone, " \
+          "then update this baseline deliberately."
+      }
+    end
+
+    # INTEGRATION.md step 3, as close as a textual scan can get to it: "Visibility filtering
+    # alone is not enforcement." A wiring file naming a visibility seam and no gate seam is the
+    # specific half-done wiring that comment exists to catch.
+    it "records that the wiring file names both a visibility seam and an invocation gate" do
+      named = references.fetch(AtomspaceWiringBaseline::WIRING_RELATIVE_PATH, [])
+
+      expect(named & AtomspaceWiringBaseline::VISIBILITY_SEAMS.keys).not_to be_empty
+      expect(named & AtomspaceWiringBaseline::GATE_SEAMS.keys).not_to be_empty, lambda {
+        "the wiring file references #{named.inspect} -- a visibility seam with no invocation " \
+          "gate is not enforcement."
+      }
+    end
+
+    # Which seam, not just that one is named. The context-taking pair routes the question
+    # through GrantReadResult#authorization_valid_now?, so freshness cannot be dropped; the
+    # array-taking pair takes a bare scope list and leaves that judgement to its caller. Wiring
+    # that silently moved to the array-taking seams would still satisfy the example above.
+    it "records the wiring file as reaching the context-taking seams specifically" do
+      named = references.fetch(AtomspaceWiringBaseline::WIRING_RELATIVE_PATH, [])
+
+      expect(named).to include("visible_for_context", "gate_for_context!")
+    end
+
+    # The mount, asserted directly rather than inferred from the keys list above. The
+    # distinction matters because a seam reference in rack_app would make the public
+    # dispatch path itself an authorization decision point, and a seam reference in the
+    # envelope layer would put the SAME decision in two files -- the shape that lets one
+    # drift away from the other. Both read the entrypoint's answer and neither re-derives it.
+    AtomspaceWiringBaseline::MOUNT_RELATIVE_PATHS.each do |relative_path|
+      it "records that #{relative_path} reaches no registry seam" do
+        named = references.fetch(relative_path, [])
+
+        expect(named).to be_empty,
+                         "#{relative_path} now names #{named.inspect}. The mount must delegate " \
+                         "every authorization decision to the dedicated entrypoint; a seam here " \
+                         "is either a filter on the public table or a second decision point."
+      end
+    end
+
+    # The premise the three examples above rest on: these files are actually scanned. A
+    # typo'd path would make every "reaches no seam" example pass vacuously.
+    it "actually scans the mount files it clears" do
+      scanned = AtomspaceWiringBaseline.scanned_paths
+
+      expect(scanned).to include(*AtomspaceWiringBaseline::MOUNT_RELATIVE_PATHS)
+    end
+  end
+
+  # The scan itself, exercised against synthetic source. An absence-or-presence check that
+  # cannot distinguish the seams it names is worth little, and the word-anchoring below is the
+  # specific property the previous substring scan lacked.
+  describe "the seam scanner (in-memory source)" do
+    it "distinguishes the context-taking seam from its array-taking twin" do
+      context_only = "Registry.visible_for_context(context)"
+      array_only = "Registry.visible_for(scopes)"
+
+      expect(AtomspaceWiringBaseline::VISIBILITY_SEAMS["visible_for"].match?(context_only)).to be(false)
+      expect(AtomspaceWiringBaseline::VISIBILITY_SEAMS["visible_for_context"].match?(context_only)).to be(true)
+      expect(AtomspaceWiringBaseline::VISIBILITY_SEAMS["visible_for"].match?(array_only)).to be(true)
+      expect(AtomspaceWiringBaseline::VISIBILITY_SEAMS["visible_for_context"].match?(array_only)).to be(false)
+    end
+
+    it "distinguishes the context-taking gate from its array-taking twin" do
+      expect(AtomspaceWiringBaseline::GATE_SEAMS["gate!"].match?("Registry.gate_for_context!(t, c)")).to be(false)
+      expect(AtomspaceWiringBaseline::GATE_SEAMS["gate_for_context!"].match?("Registry.gate_for_context!(t, c)"))
+        .to be(true)
+      expect(AtomspaceWiringBaseline::GATE_SEAMS["gate!"].match?("Registry.gate!(t, s)")).to be(true)
     end
   end
 end

@@ -89,8 +89,12 @@ Style/FrozenStringLiteralComment:
   Enabled: true
   EnforcedStyle: always
 
-# Allow short parameter names 'q' for query parameters and 'to' for format conversion
+# Allow short parameter names 'q' for query parameters, 'to' for format conversion,
+# and 'id' for the JSON-RPC request id, which is that protocol's own field name --
+# renaming it to satisfy a length rule would make the code read less like the spec
+# it implements.
 Naming/MethodParameterName:
   AllowedNames:
     - q
     - to
+    - id

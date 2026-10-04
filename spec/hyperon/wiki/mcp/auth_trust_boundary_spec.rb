@@ -22,11 +22,11 @@
 #   RackApp#authenticate_with_decko  ->  that role, or "user" when it is nil
 #
 # Sources under characterization:
-#   lib/hyperon/wiki/mcp/auth.rb:39      attr_reader :username, :resolved_role
-#   lib/hyperon/wiki/mcp/auth.rb:172     #fetch_token (private)
+#   lib/hyperon/wiki/mcp/auth.rb:207     attr_reader :username, :resolved_role
+#   lib/hyperon/wiki/mcp/auth.rb:591     #fetch_token (private)
 #   lib/hyperon/wiki/mcp/config.rb:95    #auth_payload
-#   lib/hyperon/wiki/mcp/rack_app.rb:859 #authenticate_with_decko (private)
-#   lib/hyperon/wiki/mcp/rack_app.rb:951 role -> scope mapping (private)
+#   lib/hyperon/wiki/mcp/rack_app.rb:868 #authenticate_with_decko (private)
+#   lib/hyperon/wiki/mcp/rack_app.rb:960 role -> scope mapping (private)
 #
 # Deliberately NOT re-covered here (already characterized elsewhere):
 #   * token/JWKS caching, refresh and error mapping  -> auth_spec.rb

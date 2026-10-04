@@ -6,6 +6,12 @@ require "rack"
 require "securerandom"
 require "uri"
 
+# The dedicated AtomSpace path's own JSON-RPC layer. Required here because this file MOUNTS
+# it; the registry seams it ultimately reaches stay where they were, referenced only from
+# Server::AtomspaceEntrypoint (see spec/server/tools/atomspace/wiring_spec.rb, which is what
+# keeps the dedicated toolset from becoming a filter on the public one).
+require_relative "server/atomspace_json_rpc"
+
 module Hyperon
   module Wiki
     module Mcp
@@ -117,6 +123,17 @@ module Hyperon
         end
       end
 
+      # Who an authenticated MCP request is, as resolved from its Bearer token:
+      # the per-user Tools the session holds, the session id the token's `jti`
+      # named, and the claims the SIGNATURE covered.
+      #
+      # The three travel together because they are only meaningful together.
+      # The Tools alone say what a request can call but not who is calling; the
+      # claims alone name an identity with no session behind it. Keeping them
+      # as one value means the dispatch path cannot pair a session's tools with
+      # an identity read from somewhere else -- an unverified decode, say.
+      BearerPrincipal = Struct.new(:tools, :session_id, :verified_claims, keyword_init: true)
+
       # Pure Rack app without Sinatra - complete control over middleware
       # rubocop:disable Metrics/ClassLength
       class RackApp
@@ -131,6 +148,43 @@ module Hyperon
 
         # Cached health response TTL (seconds)
         HEALTH_CACHE_TTL = 30
+
+        # Where the dedicated AtomSpace toolset is served.
+        #
+        # A PATH on this host, not a new host or port: HostAuthorization::ALLOWED_HOSTS
+        # is a fixed allowlist and README-OPS documents nginx proxying mcp.hyperon.dev
+        # to 127.0.0.1:3002 with the Host header rewritten, so a second host or port
+        # would need an nginx change, a service-file change, and a doc change to serve
+        # a toolset no principal can use yet. Under /mcp/ because that is where every
+        # MCP transport on this host already lives (/mcp, /sse, /messages), and the
+        # name says which toolset rather than which protocol version.
+        ATOMSPACE_PATH = "/mcp/atomspace"
+
+        # The scopes the three /.well-known discovery documents advertise.
+        #
+        # ADVERTISEMENT IS NOT AUTHORIZATION, and this list is the only thing it
+        # changes. `mcp:atomspace:read` is named here so a client can DISCOVER that
+        # the scope exists on this resource and ask the deck for it; nothing on this
+        # side mints it. #scope_for_role still maps roles to mcp:read / mcp:write /
+        # mcp:admin and nothing else, so the gem's own issued credential can never
+        # carry the AtomSpace scope. The only thing that authorizes POST
+        # /mcp/atomspace is a verified deck-issued grant naming the scope, read
+        # through Auth#read_grant (McpApi::AtomspaceGrants, POLICY REV4, deck repo);
+        # without one every call on that path is still denied -32002.
+        #
+        # Shared by all three documents rather than repeated three times, so a scope
+        # cannot be advertised by one discovery document and withheld by another --
+        # a client that reads whichever document it prefers sees the same answer.
+        DISCOVERY_SCOPES_SUPPORTED = ["mcp:read", "mcp:write", "mcp:admin", "mcp:atomspace:read"].freeze
+
+        # One lock for every #handle on the shared MCP::Server. Its context is
+        # shared mutable state: a per-user dispatch swaps it for the duration
+        # of that request, so any #handle running alongside -- per-user or
+        # default identity -- would otherwise be served under another
+        # request's tools and RequestContext. Created eagerly, because a
+        # lazily assigned `@mutex ||= Mutex.new` can hand two first requests
+        # two different locks.
+        DISPATCH_LOCK = Mutex.new
 
         class << self
           attr_accessor :mcp_server_instance, :token_issuer, :credential_store, :client_cards, :rate_limiter
@@ -246,6 +300,15 @@ module Hyperon
                ["POST", "/message"], ["POST", "/messages"]
             handle_mcp_message(request, env, session_id)
 
+          # The dedicated AtomSpace toolset. A path on THIS host rather than a new
+          # host or port, so HostAuthorization::ALLOWED_HOSTS and the nginx story
+          # are untouched; named under /mcp/ because every MCP transport on this
+          # host already lives there, and both spellings are accepted because
+          # /sse and /mcp already accept theirs. Nothing advertises it yet -- see
+          # #handle_atomspace_message.
+          when ["POST", ATOMSPACE_PATH], ["POST", "#{ATOMSPACE_PATH}/"]
+            handle_atomspace_message(request, env, session_id)
+
           when ["DELETE", "/sse"], ["DELETE", "/sse/"], ["DELETE", "/mcp"], ["DELETE", "/mcp/"]
             handle_session_delete(incoming_session_id, session_id)
 
@@ -310,7 +373,7 @@ module Hyperon
                                           resource: issuer_url,
                                           authorization_servers: [issuer_url],
                                           bearer_methods_supported: ["header"],
-                                          scopes_supported: ["mcp:read", "mcp:write", "mcp:admin"]
+                                          scopes_supported: DISCOVERY_SCOPES_SUPPORTED
                                         })]]
         end
 
@@ -329,7 +392,7 @@ module Hyperon
                                           grant_types_supported:
                                             %w[authorization_code refresh_token client_credentials],
                                           token_endpoint_auth_methods_supported: %w[client_secret_post none],
-                                          scopes_supported: ["mcp:read", "mcp:write", "mcp:admin"]
+                                          scopes_supported: DISCOVERY_SCOPES_SUPPORTED
                                         })]]
         end
 
@@ -350,7 +413,7 @@ module Hyperon
                                           grant_types_supported:
                                             %w[authorization_code refresh_token client_credentials],
                                           token_endpoint_auth_methods_supported: %w[client_secret_post none],
-                                          scopes_supported: ["mcp:read", "mcp:write", "mcp:admin"],
+                                          scopes_supported: DISCOVERY_SCOPES_SUPPORTED,
                                           subject_types_supported: ["public"],
                                           id_token_signing_alg_values_supported: ["RS256"]
                                         })]]
@@ -569,34 +632,29 @@ module Hyperon
                                                     })]]
             end
 
-            # Check Bearer token for per-user Tools
-            per_user_tools = resolve_bearer_token(env)
+            # Resolve the Bearer token to the principal it names: the session's
+            # per-user Tools plus the identity the signature covered.
+            principal = resolve_bearer_principal(env)
 
             # Fail closed: a request without a valid per-user token is rejected
-            # unless it is a trusted same-box caller (localhost origin + shared
-            # secret). This is independent of OAUTH_REQUIRE_AUTH / oauth_enabled?
-            # so a missing or degraded OAuth stack can never widen external
-            # access to the default identity.
-            if per_user_tools.nil? && !self.class.trusted_local_caller?(env)
-              issuer_url = self.class.oauth_issuer_url
-              headers = add_mcp_headers({
-                                          "Content-Type" => "application/json",
-                                          "WWW-Authenticate" => "Bearer resource_metadata=" \
-                                                                "\"#{issuer_url}/.well-known/oauth-protected-resource\""
-                                        }, session_id)
-              return [401, headers, [JSON.generate({
-                                                     jsonrpc: "2.0",
-                                                     id: nil,
-                                                     error: { code: -32001, message: "Authentication required" }
-                                                   })]]
-            end
+            # unless it is a trusted same-box caller. The gate itself lives in
+            # #authentication_refusal so the dedicated AtomSpace path cannot
+            # grow a second, subtly different copy of it.
+            refusal = authentication_refusal(principal, env, session_id)
+            return refusal if refusal
 
             request_data = JSON.parse(body, symbolize_names: true)
 
-            response = if per_user_tools
-                         handle_with_user_tools(request_data, per_user_tools)
+            response = if principal
+                         # The context is built per request, from this
+                         # principal's own grant read, and may be nil when no
+                         # grant backs it -- see #build_request_context for why
+                         # that absence is the fail-closed answer rather than a
+                         # refusal.
+                         handle_with_user_tools(request_data, principal.tools,
+                                                request_context: build_request_context(principal))
                        else
-                         self.class.mcp_server_instance.handle(request_data)
+                         handle_with_default_context(request_data)
                        end
 
             headers = add_mcp_headers({ "Content-Type" => "application/json" }, session_id)
@@ -626,6 +684,128 @@ module Hyperon
           self.class.session_manager.delete(incoming_session_id) if incoming_session_id
           headers = add_mcp_headers({ "Content-Type" => "application/json" }, session_id)
           [200, headers, [JSON.generate({ status: "session closed" })]]
+        end
+
+        # THE authentication gate, for every MCP path on this host.
+        #
+        # One method rather than one per path, because this is the gate the 2026-06-14
+        # incident opened: the hosted server served no-token requests through a
+        # privileged DEFAULT identity. A second path with its own copy of these four
+        # lines is how that reopens -- not by someone removing the gate, but by a new
+        # path being written without it, or with an `oauth_enabled?` check in front of
+        # it. The dedicated AtomSpace path calls this one.
+        #
+        # Independent of OAUTH_REQUIRE_AUTH and oauth_enabled? on purpose, so a missing
+        # or degraded OAuth stack can never widen external access to the default
+        # identity. A trusted same-box caller (localhost origin + the X-MCP-Local
+        # shared secret) is admitted with NO principal: admission is not
+        # authorization, and what such a caller may then do is decided downstream --
+        # for the AtomSpace path, by a context it does not have.
+        #
+        # @return [Array, nil] a 401 Rack response, or nil when the request may proceed
+        def authentication_refusal(principal, env, session_id)
+          return nil unless principal.nil?
+          return nil if self.class.trusted_local_caller?(env)
+
+          issuer_url = self.class.oauth_issuer_url
+          headers = add_mcp_headers({
+                                      "Content-Type" => "application/json",
+                                      "WWW-Authenticate" => "Bearer resource_metadata=" \
+                                                            "\"#{issuer_url}/.well-known/oauth-protected-resource\""
+                                    }, session_id)
+          [401, headers, [JSON.generate({
+                                          jsonrpc: "2.0",
+                                          id: nil,
+                                          error: { code: -32001, message: "Authentication required" }
+                                        })]]
+        end
+
+        # The dedicated AtomSpace toolset, over HTTP (INTEGRATION.md step 6).
+        #
+        # WHAT THIS DELIBERATELY DOES NOT TOUCH. The shared MCP::Server: not its tool
+        # table, not its shared mutable server_context, not DISPATCH_LOCK. A second
+        # MCP::Server whose table were Registry::TOOLS would reintroduce exactly the
+        # shared-mutable-context problem that lock exists to solve, for a second server
+        # with a second lock; and routing this path through #handle_mcp_message would
+        # make the dedicated toolset a FILTER on the public one, which Card 17184
+        # (decision 2026-06-08) forbids as an acceptance criterion. So the tool table
+        # reached here is the entrypoint's own, and the public table is not consulted.
+        #
+        # Which means no lock is taken and no deadline is armed, and both absences are
+        # correct rather than overlooked: there is no shared mutable state to serialize
+        # (the context travels as an argument), and DispatchDeadline is documented as
+        # bounding how long the shared lock is HELD -- arming it where no lock is taken
+        # would bound nothing and would start failing slow-but-working reads. Each
+        # tool's own outbound calls keep the per-attempt HttpTimeouts budget they
+        # already had.
+        #
+        # THE SAME AUTH, THE SAME CONTEXT. Authentication is #authentication_refusal --
+        # the one gate every MCP path shares -- and an authenticated request's
+        # RequestContext is #build_request_context's, read through that principal's own
+        # Auth. Nothing about identity is re-derived here.
+        #
+        # DISCOVERABLE, NOT AUTHORIZED. The three /.well-known documents now name
+        # `mcp:atomspace:read` in `scopes_supported` (DISCOVERY_SCOPES_SUPPORTED), so a
+        # client can learn the scope exists on this resource and go ask the deck for
+        # it. That is all advertisement does. #handle_root's `endpoints` map is still
+        # untouched, nothing on this side mints the scope (#scope_for_role is
+        # unchanged), and the only thing that authorizes a call here is a verified
+        # deck-issued grant naming it. Without that grant every call below is still
+        # denied -32002 -- which is what the examples in
+        # spec/hyperon/wiki/mcp/rack_app_atomspace_mount_spec.rb hold in place.
+        #
+        # STATUS MAPPING, stated because it is the contract this slice introduces: an
+        # authenticated caller whose grant does not authorize the scope gets HTTP 200
+        # carrying JSON-RPC -32002, never 401 or 403. The transport exchange succeeded
+        # and the credential is valid; only the authorization failed, and neither
+        # re-presenting the credential (401) nor a transport-level refusal (403) says
+        # that. A notification answers 200 with an EMPTY body, which is how an id-less
+        # request is answered with nothing over HTTP.
+        def handle_atomspace_message(request, env, session_id)
+          principal = resolve_bearer_principal(env)
+          refusal = authentication_refusal(principal, env, session_id)
+          return refusal if refusal
+
+          body = request.body.read
+          headers = add_mcp_headers({ "Content-Type" => "application/json" }, session_id)
+
+          begin
+            response = dispatch_atomspace(JSON.parse(body.to_s, symbolize_names: true), principal)
+            [200, headers, [response.nil? ? "" : JSON.generate(response)]]
+          rescue JSON::ParserError => e
+            [400, headers, [JSON.generate({
+                                            jsonrpc: "2.0", id: nil,
+                                            error: { code: -32700, message: "Parse error", data: e.message }
+                                          })]]
+          rescue StandardError => e
+            [500, headers, [JSON.generate({
+                                            jsonrpc: "2.0", id: nil,
+                                            error: { code: -32603, message: "Internal error", data: e.message }
+                                          })]]
+          end
+        end
+
+        # The context and the tools one AtomSpace request runs under.
+        #
+        # A trusted same-box caller reaches here with NO principal, and is given no
+        # context: it holds nothing a deck read produced, so it is authorized nothing
+        # and every tool it names is denied. The server's default Tools are still what
+        # a call would run against if one were ever authorized -- the same identity
+        # that path uses everywhere else -- so the denial comes from the absent
+        # context rather than from an absent tool table.
+        def dispatch_atomspace(request_data, principal)
+          server_context = { magi_tools: atomspace_magi_tools(principal) }
+          Hyperon::Wiki::Mcp::Server::AtomspaceJsonRpc.dispatch(
+            request_data,
+            context: principal && build_request_context(principal),
+            server_context: server_context
+          )
+        end
+
+        def atomspace_magi_tools(principal)
+          return principal.tools if principal
+
+          self.class.mcp_server_instance&.server_context&.dig(:magi_tools)
         end
 
         # rubocop:disable Metrics/MethodLength
@@ -922,11 +1102,26 @@ module Hyperon
           password = client_data[:password]
           role = client_data[:role]
 
+          # ONE source for the scope, computed before the token is signed.
+          #
+          # This used to be derived AFTER issuing, and only for the response body:
+          # the signed token said nothing about scope at all, so the body and the
+          # credential described different grants and only the unverifiable half
+          # carried the scope. Computing it once and signing it (INTEGRATION.md
+          # step 1) means a resource server reads the same answer the client was
+          # told, from material the signature covers.
+          #
+          # Role-derived, and the client's REQUESTED scope is deliberately not
+          # consulted: honouring it would let a caller assert its own grant, which
+          # is exactly what Auth#scopes refuses to read from an untrusted source.
+          scope = scope_for_role(role)
+
           # Issue access token
           access_token = self.class.token_issuer.issue(
             sub: username,
             role: role,
-            session_id: new_session_id
+            session_id: new_session_id,
+            scope: scope
           )
 
           # Issue refresh token
@@ -948,13 +1143,6 @@ module Hyperon
             tools: tools
           )
 
-          # Map role to scope
-          scope = case role
-                  when "admin" then "mcp:admin"
-                  when "gm" then "mcp:write"
-                  else "mcp:read"
-                  end
-
           [200, headers, [JSON.generate({
                                           access_token: access_token,
                                           token_type: "Bearer",
@@ -964,6 +1152,22 @@ module Hyperon
                                         })]]
         end
         # rubocop:enable Metrics/MethodLength, Metrics/AbcSize
+
+        # The scope a role is issued, as this server has always mapped it.
+        #
+        # Unchanged policy, moved to one place so the signed claim and the response
+        # body cannot drift apart. It says nothing about mcp:atomspace:read: that
+        # scope is granted by McpApi::AtomspaceGrants (deck repo, POLICY REV4) and
+        # signed into the DECK's token that Auth#read_grant reads, not into the
+        # gem's own inbound credential. mcp:admin is likewise a separate scope and
+        # is never implied by a read scope.
+        def scope_for_role(role)
+          case role
+          when "admin" then "mcp:admin"
+          when "gm" then "mcp:write"
+          else "mcp:read"
+          end
+        end
 
         # Create a Tools instance for a specific user
         def create_user_tools(username, password, role)
@@ -990,8 +1194,17 @@ module Hyperon
           end
         end
 
-        # Extract and verify Bearer token, return per-user Tools or nil
-        def resolve_bearer_token(env)
+        # Extract and verify a Bearer token, returning the principal it names
+        # or nil.
+        #
+        # Returns the whole resolved principal rather than just its Tools,
+        # because what the request may do is decided from the claims the
+        # SIGNATURE covered and from the session those claims named -- the
+        # token's jti, which is the key the credential store filed the session
+        # under. A caller that kept only the Tools would have to re-derive the
+        # identity from somewhere else, and the only other sources are an
+        # unverified decode or a guess.
+        def resolve_bearer_principal(env)
           return nil unless self.class.oauth_enabled?
 
           auth_header = env["HTTP_AUTHORIZATION"]
@@ -1000,13 +1213,84 @@ module Hyperon
           token = auth_header[7..]
           return nil if token == "public-access" # Skip legacy public token
 
-          begin
-            claims = self.class.token_issuer.verify(token)
-            session = self.class.credential_store.get_session(claims["jti"])
-            session&.dig(:tools)
-          rescue Hyperon::Wiki::Mcp::OAuth::TokenIssuer::TokenError
-            nil
-          end
+          claims = verify_access_token(token)
+          return nil unless claims
+
+          session_principal(claims)
+        end
+
+        # nil rather than a raised error: an unverifiable token is simply not a
+        # principal, and the caller's fail-closed gate turns that into a 401.
+        def verify_access_token(token)
+          self.class.token_issuer.verify(token)
+        rescue Hyperon::Wiki::Mcp::OAuth::TokenIssuer::TokenError
+          nil
+        end
+
+        def session_principal(claims)
+          session_id = claims["jti"]
+          session = self.class.credential_store.get_session(session_id)
+          tools = session&.dig(:tools)
+          return nil unless tools
+
+          BearerPrincipal.new(tools: tools, session_id: session_id, verified_claims: claims)
+        end
+
+        # Build the RequestContext one authenticated request runs under, or nil
+        # when no grant backs it.
+        #
+        # The grant is read through THIS principal's own Auth -- the per-user
+        # Tools' client -- so the capture describes the credential this request
+        # will send outbound, not the server's default identity. Nothing else
+        # on the request can be asked: the claims say who is calling, only a
+        # deck read says what they currently hold.
+        #
+        # No required scope is named. Auth#read_grant records the caller's
+        # scope intent and nothing more -- the capture is scope-agnostic, and
+        # the decision is applied later by
+        # GrantReadResult#authorization_valid_now? -- so passing nil states
+        # that this seam makes no scope demand yet rather than inventing one no
+        # policy has chosen.
+        #
+        # Returns nil, not a refusal, when the grant did not verify: this seam
+        # plumbs capture and decides nothing. A consumer reads the ABSENCE of a
+        # context as "nothing was authorized" -- never as permission -- and
+        # refusing the request belongs to whichever slice enforces a scope.
+        #
+        # Runs BEFORE the dispatch lock is taken and outside the dispatch
+        # deadline, deliberately. The budget exists to bound how long the lock
+        # is HELD (see #with_dispatch_deadline), so arming it around this read
+        # would spend the dispatch's budget before the dispatch owned the lock;
+        # a slow read here delays only this request and blocks no other
+        # session.
+        def build_request_context(principal)
+          grant = read_principal_grant(principal)
+          return nil unless grant&.verification_status == :verified && grant.credential_ref
+
+          Hyperon::Wiki::Mcp::RequestContext.new(
+            principal_kind: :authenticated_session,
+            session_id: principal.session_id,
+            verified_inbound_claims: principal.verified_claims,
+            grant_read_result: grant,
+            outbound_credential_ref: grant.credential_ref,
+            grant_source: :deck_verified_token,
+            local_trusted: false,
+            # Per dispatch, not per session: a session serves many requests,
+            # so only a fresh id can tie one grant read to the one request
+            # that acted on it.
+            request_id: SecureRandom.uuid
+          )
+        end
+
+        # A grant read that cannot complete leaves the request with no context,
+        # the same fail-closed answer as one that does not verify. Scoped to
+        # the read alone: construction below is guarded by explicit checks, and
+        # swallowing errors from it would hide a contract bug as a missing
+        # context.
+        def read_principal_grant(principal)
+          principal.tools.client.auth.read_grant(required_scope: nil)
+        rescue StandardError
+          nil
         end
 
         # Build a JWK (JSON Web Key) from an RSA public key
@@ -1031,20 +1315,61 @@ module Hyperon
           Base64.urlsafe_encode64(data, padding: false)
         end
 
-        # Handle MCP request with per-user Tools (thread-safe context swap)
-        def handle_with_user_tools(request_data, per_user_tools)
+        # Handle MCP request with per-user Tools (thread-safe context swap).
+        # A caller-supplied RequestContext is carried in the swapped context
+        # as-is and dropped with it on restore; without one, the key is
+        # omitted rather than set to nil.
+        #
+        # The server's own context is restored even when handle raises: the
+        # caller turns that error into a 500 and keeps serving, so a skipped
+        # restore would hand the next request this one's tools and context.
+        def handle_with_user_tools(request_data, per_user_tools, request_context: nil)
           mcp_server = self.class.mcp_server_instance
 
-          # Thread-safe: swap server_context for this request
-          @request_mutex ||= Mutex.new
-          @request_mutex.synchronize do
-            original_context = mcp_server.server_context
-            working_dir = original_context&.dig(:working_directory) || Dir.pwd
-            mcp_server.server_context = { magi_tools: per_user_tools, working_directory: working_dir }
-            response = mcp_server.handle(request_data)
-            mcp_server.server_context = original_context
-            response
+          DISPATCH_LOCK.synchronize do
+            with_dispatch_deadline do
+              original_context = mcp_server.server_context
+              working_dir = original_context&.dig(:working_directory) || Dir.pwd
+              request_server_context = { magi_tools: per_user_tools, working_directory: working_dir }
+              request_server_context[:request_context] = request_context if request_context
+              begin
+                mcp_server.server_context = request_server_context
+                mcp_server.handle(request_data)
+              ensure
+                mcp_server.server_context = original_context
+              end
+            end
           end
+        end
+
+        # Handle MCP request under the server's own (default-identity)
+        # context. Takes the same lock as every per-user swap, so it can never
+        # be served under one.
+        def handle_with_default_context(request_data)
+          DISPATCH_LOCK.synchronize do
+            with_dispatch_deadline { self.class.mcp_server_instance.handle(request_data) }
+          end
+        end
+
+        # Arm the total outbound budget for the duration of one dispatch.
+        #
+        # INSIDE the lock, not around it. The budget exists to bound how long
+        # the lock is HELD, so it must start when this request owns the lock
+        # rather than when it started queueing -- otherwise a request that
+        # waited behind a slow one would arrive with its budget already spent
+        # and fail without having made a single call.
+        #
+        # This is the ONLY place the deadline is armed, which is what keeps it
+        # server-dispatch-only: the stdio entrypoints and every CLI or batch
+        # caller share the same Client, Auth, and Tools, run no lock, block
+        # nobody, and keep their long-tail retries untouched.
+        #
+        # What the budget bounds and what it does not -- a trickling peer and
+        # Tools#upload_from_url's own Net::HTTP timeouts are outside it -- is
+        # spelled out on DispatchDeadline, along with why the budget is total
+        # rather than per-attempt, and why 15s.
+        def with_dispatch_deadline(&)
+          Hyperon::Wiki::Mcp::DispatchDeadline.arm(&)
         end
       end
       # rubocop:enable Metrics/ClassLength
